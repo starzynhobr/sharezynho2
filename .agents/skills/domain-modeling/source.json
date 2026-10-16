@@ -1,0 +1,16 @@
+{
+  "name": "domain-modeling",
+  "repository": "https://github.com/mattpocock/skills",
+  "source": "transitive dependency",
+  "skills_sh": "https://skills.sh/mattpocock/skills/domain-modeling",
+  "installed_at": "2026-09-09",
+  "upstream_path": "skills/engineering/domain-modeling",
+  "upstream_ref": "3cca18b368ae95cdbdebbff572ccafa662551015",
+  "license": "MIT",
+  "required_by": [
+    "improve-codebase-architecture"
+  ],
+  "local_modifications": [
+    "description shortened for routing/context budget"
+  ]
+}

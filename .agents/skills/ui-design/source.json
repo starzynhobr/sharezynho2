@@ -1,0 +1,31 @@
+{
+  "name": "ui-design",
+  "source": "original",
+  "author": "repository owner",
+  "created_at": "2026-10-06",
+  "supersedes": [
+    "ui-ux-principles",
+    "frontend-design",
+    "redesign-existing-projects",
+    "ui-ux-pro-max"
+  ],
+  "references": "Original synthesis written with Claude; text is rewritten, not copied. references/ux-foundations.md consolidates this repository's own ui-ux-principles skill. references/redesign-audit.md is informed by the audit categories of leonxlnx/taste-skill (MIT), reconciled with this skill's precedence rules. references/visual-direction.md covers ground also treated by anthropics/skills frontend-design (Apache-2.0). Other sources: WCAG 2.2, WAI-ARIA Authoring Practices, Bringhurst on type scale and measure, 4px/8px spacing systems, three-layer design tokens, Material and Apple HIG motion guidance.",
+  "compatibility": "The optional lookup tool in scripts/ requires Python 3 (stdlib only). The rest of the skill has no dependencies.",
+  "vendored": [
+    {
+      "paths": [
+        "scripts/",
+        "data/"
+      ],
+      "repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+      "skills_sh": "https://skills.sh/nextlevelbuilder/ui-ux-pro-max-skill/ui-ux-pro-max",
+      "upstream_path": ".claude/skills/ui-ux-pro-max",
+      "upstream_ref": "4aad0584d92131626b16d4ff4d77f0455385013c",
+      "installed_at": "2026-09-09",
+      "license": "MIT",
+      "local_modifications": [
+        "scripts/ and data/ copied unmodified; upstream SKILL.md and references/ (quick-reference.md, pro-rules.md) dropped and replaced by references/style-lookup.md, which subordinates the tool to this skill's precedence rules."
+      ]
+    }
+  ]
+}

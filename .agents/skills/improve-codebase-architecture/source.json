@@ -1,0 +1,13 @@
+{
+  "name": "improve-codebase-architecture",
+  "repository": "https://github.com/mattpocock/skills",
+  "source": "skills.sh",
+  "skills_sh": "https://skills.sh/mattpocock/skills/improve-codebase-architecture",
+  "installed_at": "2026-09-09",
+  "upstream_path": "skills/engineering/improve-codebase-architecture",
+  "upstream_ref": "3cca18b368ae95cdbdebbff572ccafa662551015",
+  "license": "MIT",
+  "local_modifications": [
+    "description shortened for routing/context budget"
+  ]
+}

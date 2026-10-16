@@ -1,0 +1,59 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-root: #070c16;
+  --color-panel: #0e1523;
+  --color-main: #111a2c;
+  --color-card: #162238;
+  --color-card-hover: #1d2d4a;
+  --color-control: #1f2e48;
+  --color-control-hover: #293d60;
+
+  --color-brand: #3b82f6;
+  --color-brand-hover: #60a5fa;
+  --color-brand-active: #2563eb;
+
+  --color-border-subtle: #1c283d;
+  --color-border-hover: #3b82f6;
+  --color-border-strong: #2d3f5e;
+
+  --font-sans: Inter, Segoe UI, system-ui, sans-serif;
+
+  --shadow-glow-brand: 0 0 20px -3px rgba(59, 130, 246, 0.35);
+  --shadow-glow-success: 0 0 20px -3px rgba(16, 185, 129, 0.35);
+  --shadow-glow-danger: 0 0 20px -3px rgba(239, 68, 68, 0.35);
+}
+
+@layer base {
+  * {
+    @apply border-border-subtle;
+  }
+  html,
+  body {
+    background-color: #070c16;
+    color: #f1f5f9;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Custom sleek scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}

@@ -1,0 +1,13 @@
+{
+  "name": "diagnosing-bugs",
+  "repository": "https://github.com/mattpocock/skills",
+  "source": "skills.sh",
+  "skills_sh": "https://skills.sh/mattpocock/skills/diagnosing-bugs",
+  "installed_at": "2026-09-09",
+  "upstream_path": "skills/engineering/diagnosing-bugs",
+  "upstream_ref": "3cca18b368ae95cdbdebbff572ccafa662551015",
+  "license": "MIT",
+  "local_modifications": [
+    "description shortened for routing/context budget"
+  ]
+}
