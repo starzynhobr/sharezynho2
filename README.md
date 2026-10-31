@@ -15,7 +15,7 @@ Backend em **Rust** e interface em **Tauri 2 + React**, sem dependências extern
 | **Inicialização** | 3 – 5 segundos | **Instantânea (< 0.1s)** |
 | **Servidor de Mídia** | Processo Go externo (`livekit-server.exe` ~60MB) | **Servidor embutido Tokio (TCP 9765 + UDP 9766)** |
 | **Captura de Tela** | Python DXcam com conversões pesadas | **Windows Graphics Capture (DirectX hardware accelerated)** |
-| **Áudio / Voz** | sounddevice + libwebrtc C++ bindings | **WASAPI nativo via `cpal` com VAD e buffer de baixa latência** |
+| **Áudio / Voz** | sounddevice + libwebrtc C++ bindings | **WASAPI nativo via `cpal` com eco cancelado, redução de ruído e VAD (`sonora`)** |
 | **Interface Gráfica** | PySide6 / Qt6 (pesado, lento) | **Tauri 2 + React 19 + Tailwind CSS v4** |
 
 ---

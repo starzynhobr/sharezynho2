@@ -239,3 +239,20 @@ impl ScreenCapture {
         self.stop_flag.store(true, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downscale_averages_each_block() {
+        let pixels = [0, 0, 0, 255, 100, 100, 100, 255];
+        assert_eq!(downscale_rgba(&pixels, 2, 1, 1).len(), 8);
+
+        let square = [
+            0, 0, 0, 255, 40, 40, 40, 255, //
+            80, 80, 80, 255, 120, 120, 120, 255,
+        ];
+        assert_eq!(downscale_rgba(&square, 2, 2, 2), vec![60, 60, 60, 255]);
+    }
+}

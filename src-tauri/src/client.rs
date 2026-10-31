@@ -6,6 +6,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, watch};
 
+use crate::audio::processing::VoiceProcessor;
 use crate::audio::{AudioCapture, AudioPlayback};
 use crate::protocol::{
     ClientMessage, PEER_TIMEOUT_SECS, PING_INTERVAL_SECS, ParticipantInfo, ServerMessage,
@@ -106,7 +107,8 @@ impl ClientSession {
         });
 
         // Initialize Audio Playback
-        let audio_playback = match AudioPlayback::start() {
+        let voice_processor = VoiceProcessor::shared();
+        let audio_playback = match AudioPlayback::start(voice_processor.clone()) {
             Ok(playback) => Some(playback),
             Err(e) => {
                 let _ = event_tx.send(ClientEvent::Error(format!(
@@ -225,13 +227,15 @@ impl ClientSession {
         });
 
         // Start Audio Capture
-        let audio_capture = match AudioCapture::start(audio_packet_tx, speaking_status_tx) {
-            Ok(capture) => Some(capture),
-            Err(e) => {
-                let _ = event_tx.send(ClientEvent::Error(format!("Microfone indisponível: {}", e)));
-                None
-            }
-        };
+        let audio_capture =
+            match AudioCapture::start(audio_packet_tx, speaking_status_tx, voice_processor) {
+                Ok(capture) => Some(capture),
+                Err(e) => {
+                    let _ =
+                        event_tx.send(ClientEvent::Error(format!("Microfone indisponível: {}", e)));
+                    None
+                }
+            };
         let is_mic_enabled = Arc::new(AtomicBool::new(true));
 
         // TCP Reader task

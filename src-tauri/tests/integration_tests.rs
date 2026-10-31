@@ -5,7 +5,8 @@ use tokio::time::sleep;
 use sharezynho::client::{ClientEvent, ClientSession};
 use sharezynho::network::tailscale::preferred_host;
 use sharezynho::protocol::{
-    ClientMessage, ParticipantInfo, ServerMessage, serialize_client_msg, serialize_server_msg,
+    ClientMessage, ParticipantInfo, ServerMessage, TAG_AUDIO, serialize_client_msg,
+    serialize_server_msg,
 };
 use sharezynho::server::RoomServer;
 
@@ -129,4 +130,159 @@ async fn test_room_server_and_client_end_to_end() {
     bob.disconnect();
     let _ = shutdown_tx.send(true);
     let _ = server_handle.await;
+}
+
+async fn join_raw(tcp_port: u16, room: &str, udp_port: u16) -> tokio::net::TcpStream {
+    use tokio::io::AsyncWriteExt;
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", tcp_port))
+        .await
+        .unwrap();
+    let join = ClientMessage::Join {
+        name: "Raw".to_string(),
+        room: room.to_string(),
+        udp_port,
+    };
+    stream
+        .write_all(serialize_client_msg(&join).as_bytes())
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(50)).await;
+    stream
+}
+
+#[tokio::test]
+async fn test_relay_only_serves_admitted_participants() {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let (tcp_port, udp_port) = (28775, 28776);
+    let server = RoomServer::start(tcp_port, udp_port, shutdown_rx)
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(50)).await;
+
+    let member_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let member_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let outsider = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port_a = member_a.local_addr().unwrap().port();
+    let port_b = member_b.local_addr().unwrap().port();
+    let _tcp_a = join_raw(tcp_port, "ROOM", port_a).await;
+    let _tcp_b = join_raw(tcp_port, "ROOM", port_b).await;
+
+    let relay = ("127.0.0.1", udp_port);
+    let mut buf = [0u8; 16];
+
+    outsider.send_to(&[TAG_AUDIO, 9], relay).await.unwrap();
+    let blocked =
+        tokio::time::timeout(Duration::from_millis(200), member_b.recv_from(&mut buf)).await;
+    assert!(blocked.is_err(), "outsider packet must not be relayed");
+
+    member_a.send_to(&[TAG_AUDIO, 7], relay).await.unwrap();
+    let (len, _) = tokio::time::timeout(Duration::from_secs(1), member_b.recv_from(&mut buf))
+        .await
+        .expect("member packet must be relayed")
+        .unwrap();
+    assert_eq!(&buf[..len], &[TAG_AUDIO, 7]);
+
+    let _ = shutdown_tx.send(true);
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn test_room_shutdown_closes_guest_connections() {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let tcp_port = 28785;
+    let server = RoomServer::start(tcp_port, 28786, shutdown_rx)
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(50)).await;
+
+    let (guest_tx, guest_rx) = mpsc::channel();
+    let addr = format!("127.0.0.1:{}", tcp_port);
+    let _guest = ClientSession::connect(&addr, "ROOM", "Guest", false, guest_tx)
+        .await
+        .unwrap();
+
+    let _ = shutdown_tx.send(true);
+    let _ = server.await;
+    sleep(Duration::from_millis(200)).await;
+
+    let disconnected = guest_rx
+        .try_iter()
+        .any(|event| matches!(event, ClientEvent::Disconnected));
+    assert!(disconnected);
+}
+
+#[tokio::test]
+async fn test_guest_detects_unresponsive_host_and_hostname_works() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:28795")
+        .await
+        .unwrap();
+    let silent_host = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let admitted = ServerMessage::Admitted {
+            participant_id: "guest".to_string(),
+            room: "ROOM".to_string(),
+            udp_relay_port: 28796,
+        };
+        socket
+            .write_all(serialize_server_msg(&admitted).as_bytes())
+            .await
+            .unwrap();
+        sleep(Duration::from_secs(20)).await;
+    });
+
+    let (guest_tx, guest_rx) = mpsc::channel();
+    let _guest = ClientSession::connect("localhost:28795", "ROOM", "Guest", false, guest_tx)
+        .await
+        .unwrap();
+
+    sleep(Duration::from_secs(16)).await;
+    let disconnected = guest_rx
+        .try_iter()
+        .any(|event| matches!(event, ClientEvent::Disconnected));
+    assert!(disconnected);
+    silent_host.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_real_screen_capture_reaches_viewer_and_can_restart() {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let tcp_port = 28805;
+    let server = RoomServer::start(tcp_port, 28806, shutdown_rx)
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(50)).await;
+
+    let addr = format!("127.0.0.1:{}", tcp_port);
+    let (host_tx, _host_rx) = mpsc::channel();
+    let (viewer_tx, _viewer_rx) = mpsc::channel();
+    let mut host = ClientSession::connect(&addr, "ROOM", "Host", true, host_tx)
+        .await
+        .unwrap();
+    let viewer = ClientSession::connect(&addr, "ROOM", "Viewer", false, viewer_tx)
+        .await
+        .unwrap();
+
+    for attempt in 0..2 {
+        *viewer.latest_screen_frame.lock().unwrap() = None;
+        tokio::task::block_in_place(|| host.start_screen_share(0)).unwrap();
+
+        let mut frame = None;
+        for _ in 0..50 {
+            sleep(Duration::from_millis(100)).await;
+            frame = viewer.latest_screen_frame.lock().unwrap().clone();
+            if frame.is_some() {
+                break;
+            }
+        }
+        host.stop_screen_share();
+
+        let frame = frame.unwrap_or_else(|| panic!("no frame on attempt {attempt}"));
+        assert_eq!(&frame[..2], &[0xFF, 0xD8], "frame must be a JPEG");
+        image::load_from_memory(&frame).expect("frame must decode");
+        sleep(Duration::from_millis(300)).await;
+    }
+
+    let _ = shutdown_tx.send(true);
+    let _ = server.await;
 }

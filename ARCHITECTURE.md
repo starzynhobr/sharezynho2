@@ -57,6 +57,8 @@ O Sharezynho 2 substitui toda a pilha pesada anterior (PySide6, LiveKit Server G
   - Captura via WASAPI nativo com a crate `cpal`.
   - Converte canais para mono e reamostra a taxa do dispositivo para 16kHz.
   - **VAD (Voice Activity Detection)**: Calcula a energia RMS do frame de 20ms. Silêncio não consome banda (zero pacotes enviados). Quando o usuário fala, o avatar ganha contorno azul luminoso em tempo real.
+- **Processamento (`processing.rs`)**:
+  - `sonora` (porte Rust do WebRTC) aplica cancelamento de eco, supressão de ruído e controle de ganho.
 - **Reprodução (`playback.rs`)**:
   - Uma fila por participante, mixadas na reprodução, com descarte acima de 300ms para evitar acúmulo de atraso.
   - Reamostragem de 16kHz para a taxa do dispositivo de saída escolhido.

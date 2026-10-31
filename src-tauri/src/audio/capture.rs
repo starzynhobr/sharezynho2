@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-const TARGET_SAMPLE_RATE: u32 = 16000;
+use super::processing::{PROCESSING_SAMPLE_RATE as TARGET_SAMPLE_RATE, SharedProcessor};
 
 pub struct AudioCapture {
     pub is_muted: Arc<AtomicBool>,
@@ -15,6 +15,7 @@ impl AudioCapture {
     pub fn start(
         audio_packet_tx: mpsc::Sender<Vec<u8>>,
         speaking_status_tx: mpsc::Sender<bool>,
+        processor: SharedProcessor,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let device = super::selected_input_device()
             .ok_or("Nenhum dispositivo de entrada de áudio encontrado")?;
@@ -72,6 +73,11 @@ impl AudioCapture {
 
                             // When we reach ~320 samples (20ms at 16kHz)
                             if sample_accumulator.len() >= 320 {
+                                processor
+                                    .lock()
+                                    .unwrap()
+                                    .process_capture(&mut sample_accumulator);
+
                                 let mut sum_sq = 0.0f64;
                                 for &s in &sample_accumulator {
                                     let norm = s as f64 / 32768.0;
