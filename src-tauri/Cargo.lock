@@ -4599,7 +4599,7 @@ dependencies = [
 
 [[package]]
 name = "sharezynho"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "cpal",
  "fastrand",
