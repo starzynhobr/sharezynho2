@@ -85,3 +85,25 @@ Para rodar a suíte de testes automatizados (unitários e ponta a ponta):
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+## macOS
+
+Requer macOS 12.3 ou mais novo. O `.dmg` universal (Intel e Apple Silicon) é gerado pelo workflow **Build macOS** e fica na página de Releases.
+
+O app não tem assinatura da Apple, então libere-o uma vez depois de copiá-lo para Aplicativos:
+
+```bash
+xattr -cr /Applications/Sharezynho.app
+```
+
+Permita o **Microfone** na primeira chamada. Ao compartilhar a tela, permita **Gravação de Tela** em Ajustes do Sistema > Privacidade e Segurança e reabra o app.
+
+Para compilar no próprio Mac, instale Node.js, Rust e as ferramentas do Xcode, e rode:
+
+```bash
+npm ci
+```
+
+```bash
+npm run tauri build -- --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```

@@ -1,19 +1,13 @@
+use crate::protocol::TAG_VIDEO;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use windows_capture::{
-    capture::{Context, GraphicsCaptureApiHandler},
-    frame::Frame,
-    graphics_capture_api::InternalCaptureControl,
-    monitor::Monitor,
-    settings::{
-        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
-        MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
-    },
-};
 
-use crate::protocol::TAG_VIDEO;
+#[cfg(target_os = "macos")]
+use super::capture_macos as backend;
+#[cfg(windows)]
+use super::capture_windows as backend;
 
 const CHUNK_SIZE: usize = 1200;
 const TARGET_FPS: u64 = 30;
@@ -29,7 +23,7 @@ pub struct ScreenCapture {
     pub stop_flag: Arc<AtomicBool>,
 }
 
-struct CaptureFlags {
+pub(super) struct CaptureFlags {
     is_sharing: Arc<AtomicBool>,
     stop_flag: Arc<AtomicBool>,
     packet_tx: mpsc::Sender<Vec<u8>>,
@@ -37,53 +31,22 @@ struct CaptureFlags {
     frame_counter: std::sync::atomic::AtomicU32,
     next_frame_time: std::sync::Mutex<Instant>,
     quality: std::sync::atomic::AtomicU8,
-    temp_buf: std::sync::Mutex<Vec<u8>>,
 }
 
-struct CaptureHandler {
-    flags: Arc<CaptureFlags>,
-}
-
-impl GraphicsCaptureApiHandler for CaptureHandler {
-    type Flags = Arc<CaptureFlags>;
-    type Error = Box<dyn std::error::Error + Send + Sync>;
-
-    fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { flags: ctx.flags })
+impl CaptureFlags {
+    pub(super) fn should_stop(&self) -> bool {
+        self.stop_flag.load(Ordering::Relaxed)
     }
 
-    fn on_frame_arrived(
-        &mut self,
-        frame: &mut Frame,
-        capture_control: InternalCaptureControl,
-    ) -> Result<(), Self::Error> {
-        if self.flags.stop_flag.load(Ordering::Relaxed) {
-            capture_control.stop();
-            return Ok(());
-        }
+    /// True when sharing is on and the FPS and bandwidth budget allow a frame.
+    pub(super) fn ready_for_frame(&self) -> bool {
+        self.is_sharing.load(Ordering::Relaxed)
+            && Instant::now() >= *self.next_frame_time.lock().unwrap()
+    }
 
-        if !self.flags.is_sharing.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-
-        // Rate limit to target FPS and the bandwidth budget
-        {
-            let next_time = self.flags.next_frame_time.lock().unwrap();
-            if Instant::now() < *next_time {
-                return Ok(());
-            }
-        }
-
+    /// Encodes one tightly packed RGBA frame and queues its packets.
+    pub(super) fn send_rgba(&self, raw_pixels: &[u8], width: usize, height: usize) {
         let frame_start = Instant::now();
-        let width = frame.width() as usize;
-        let height = frame.height() as usize;
-        let buffer = match frame.buffer() {
-            Ok(b) => b,
-            Err(_) => return Ok(()),
-        };
-
-        let mut temp_guard = self.flags.temp_buf.lock().unwrap();
-        let raw_pixels = buffer.as_nopadding_buffer(&mut temp_guard);
 
         // Encode to JPEG
         let mut jpeg_bytes = Vec::with_capacity(64 * 1024);
@@ -93,7 +56,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             Some(pixels) => (pixels.as_slice(), width / factor, height / factor),
             None => (raw_pixels, width, height),
         };
-        let quality = self.flags.quality.load(Ordering::Relaxed);
+        let quality = self.quality.load(Ordering::Relaxed);
         let encoder = jpeg_encoder::Encoder::new(&mut jpeg_bytes, quality);
         if encoder
             .encode(
@@ -104,45 +67,38 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             )
             .is_err()
         {
-            return Ok(());
+            return;
         }
 
         if jpeg_bytes.len() > MAX_FRAME_BYTES {
-            self.flags.quality.store(
+            self.quality.store(
                 quality.saturating_sub(5).max(MIN_QUALITY),
                 Ordering::Relaxed,
             );
         } else if jpeg_bytes.len() < MIN_FRAME_BYTES {
-            self.flags
-                .quality
+            self.quality
                 .store((quality + 5).min(MAX_QUALITY), Ordering::Relaxed);
         }
 
         let budget = Duration::from_millis(jpeg_bytes.len() as u64 * 1000 / MAX_BYTES_PER_SEC);
-        *self.flags.next_frame_time.lock().unwrap() =
+        *self.next_frame_time.lock().unwrap() =
             frame_start + budget.max(Duration::from_millis(1000 / TARGET_FPS));
 
-        let frame_id = self.flags.frame_counter.fetch_add(1, Ordering::Relaxed);
+        let frame_id = self.frame_counter.fetch_add(1, Ordering::Relaxed);
 
         let total_chunks = jpeg_bytes.len().div_ceil(CHUNK_SIZE) as u16;
 
         for (chunk_idx, chunk) in jpeg_bytes.chunks(CHUNK_SIZE).enumerate() {
             let mut packet = Vec::with_capacity(13 + chunk.len());
             packet.push(TAG_VIDEO);
-            packet.extend_from_slice(&self.flags.stream_id.to_be_bytes());
+            packet.extend_from_slice(&self.stream_id.to_be_bytes());
             packet.extend_from_slice(&frame_id.to_be_bytes());
             packet.extend_from_slice(&(chunk_idx as u16).to_be_bytes());
             packet.extend_from_slice(&total_chunks.to_be_bytes());
             packet.extend_from_slice(chunk);
 
-            let _ = self.flags.packet_tx.try_send(packet);
+            let _ = self.packet_tx.try_send(packet);
         }
-
-        Ok(())
-    }
-
-    fn on_closed(&mut self) -> Result<(), Self::Error> {
-        Ok(())
     }
 }
 
@@ -172,25 +128,13 @@ fn downscale_rgba(pixels: &[u8], width: usize, height: usize, factor: usize) -> 
 
 impl ScreenCapture {
     pub fn enumerate_monitors() -> Vec<String> {
-        Monitor::enumerate()
-            .map(|list| {
-                list.into_iter()
-                    .map(|m| m.name().unwrap_or_else(|_| "Monitor".to_string()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        backend::monitor_names()
     }
 
     pub fn start(
         monitor_index: usize,
         packet_tx: mpsc::Sender<Vec<u8>>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let monitors = Monitor::enumerate()?;
-        let monitor = monitors
-            .into_iter()
-            .nth(monitor_index)
-            .ok_or("Monitor não encontrado")?;
-
         let is_sharing = Arc::new(AtomicBool::new(true));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
@@ -202,31 +146,9 @@ impl ScreenCapture {
             frame_counter: std::sync::atomic::AtomicU32::new(1),
             next_frame_time: std::sync::Mutex::new(Instant::now()),
             quality: std::sync::atomic::AtomicU8::new(MAX_QUALITY),
-            temp_buf: std::sync::Mutex::new(Vec::new()),
         });
 
-        let settings = Settings::new(
-            monitor,
-            CursorCaptureSettings::Default,
-            DrawBorderSettings::Default,
-            SecondaryWindowSettings::Default,
-            MinimumUpdateIntervalSettings::Default,
-            DirtyRegionSettings::Default,
-            ColorFormat::Rgba8,
-            flags,
-        );
-
-        // start() blocks while capturing, so only an early failure arrives here
-        let (error_tx, error_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            if let Err(e) = CaptureHandler::start(settings) {
-                let _ = error_tx.send(format!("{:?}", e));
-            }
-        });
-
-        if let Ok(e) = error_rx.recv_timeout(Duration::from_millis(500)) {
-            return Err(e.into());
-        }
+        backend::start(monitor_index, flags)?;
 
         Ok(Self {
             is_sharing,

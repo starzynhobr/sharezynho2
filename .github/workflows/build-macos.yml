@@ -1,0 +1,48 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag da release que recebe o .dmg (vazio só gera o artefato)
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Build universal
+        run: |
+          # Updater artifacts need the private key, so builds without it skip them
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then CONFIG='{}'; else CONFIG='{"bundle":{"createUpdaterArtifacts":false}}'; fi
+          npm run tauri build -- --target universal-apple-darwin --bundles app,dmg --config "$CONFIG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sharezynho-macos
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+      - name: Anexar à release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg --clobber

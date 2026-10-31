@@ -8,6 +8,15 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[cfg(target_os = "windows")]
+const TAILSCALE_PATHS: &[&str] = &["C:/Program Files/Tailscale/tailscale.exe"];
+#[cfg(not(target_os = "windows"))]
+const TAILSCALE_PATHS: &[&str] = &[
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+];
+
 /// Detects the Tailscale IPv4 address by querying `tailscale ip -4`.
 pub fn detect_tailscale_ipv4() -> Option<String> {
     // 1. Try "tailscale" from PATH
@@ -15,15 +24,11 @@ pub fn detect_tailscale_ipv4() -> Option<String> {
         return Some(ip);
     }
 
-    // 2. Try standard Windows installation path
-    let standard_path = Path::new("C:/Program Files/Tailscale/tailscale.exe");
-    if standard_path.is_file()
-        && let Ok(ip) = query_tailscale_binary(standard_path.to_str().unwrap_or_default())
-    {
-        return Some(ip);
-    }
-
-    None
+    // 2. Try standard installation paths; apps opened from Finder have a minimal PATH
+    TAILSCALE_PATHS
+        .iter()
+        .filter(|path| Path::new(path).is_file())
+        .find_map(|path| query_tailscale_binary(path).ok())
 }
 
 fn query_tailscale_binary(cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
