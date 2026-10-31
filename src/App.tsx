@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { api } from './api';
 import { useRoomStore } from './store/roomStore';
-import { NavigationRail } from './components/NavigationRail';
 import { RoomsSidebar } from './components/RoomsSidebar';
 import { MainCanvas } from './components/MainCanvas';
 import { JoinCreateModal, InviteModal, MonitorPickerModal } from './components/Dialogs';
@@ -36,12 +35,8 @@ export function App() {
   }, [init]);
 
   return (
-    <div className="flex w-full h-full p-2.5 gap-2.5 bg-root overflow-hidden select-none">
-      {/* 1. Left Navigation Rail */}
-      <NavigationRail />
-
-      {/* 2. Rooms Sidebar */}
-      <RoomsSidebar />
+    <div className="flex w-full h-full bg-root overflow-hidden select-none">
+      {currentRoom && <RoomsSidebar />}
 
       {/* 3. Main Stage Canvas */}
       <MainCanvas />

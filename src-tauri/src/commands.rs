@@ -48,8 +48,6 @@ pub struct AppState {
     pub session: Arc<tokio::sync::Mutex<Option<ClientSession>>>,
     pub server_shutdown: Arc<tokio::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
     pub latest_frame: Arc<Mutex<Option<Vec<u8>>>>,
-    pub preferred_ip: String,
-    pub is_tailscale: bool,
 }
 
 impl Default for AppState {
@@ -60,27 +58,23 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let tailscale_ip = detect_tailscale_ipv4();
-        let is_tailscale = tailscale_ip.is_some();
-        let preferred_ip = tailscale_ip
-            .or_else(detect_lan_ipv4)
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-
         Self {
             session: Arc::new(tokio::sync::Mutex::new(None)),
             server_shutdown: Arc::new(tokio::sync::Mutex::new(None)),
             latest_frame: Arc::new(Mutex::new(None)),
-            preferred_ip,
-            is_tailscale,
         }
     }
 }
 
-#[tauri::command]
-pub fn get_network_info(state: State<'_, AppState>) -> NetworkInfo {
+/// Detected on demand, since Tailscale may connect after the app opens.
+#[tauri::command(async)]
+pub fn get_network_info() -> NetworkInfo {
+    let tailscale_ip = detect_tailscale_ipv4();
     NetworkInfo {
-        preferred_ip: state.preferred_ip.clone(),
-        is_tailscale: state.is_tailscale,
+        is_tailscale: tailscale_ip.is_some(),
+        preferred_ip: tailscale_ip
+            .or_else(detect_lan_ipv4)
+            .unwrap_or_else(|| "127.0.0.1".to_string()),
         tcp_port: DEFAULT_TCP_PORT,
         udp_port: DEFAULT_UDP_PORT,
         stream_port: DEFAULT_STREAM_PORT,
@@ -138,7 +132,7 @@ pub async fn create_room(
         room: admitted_room,
         display_name,
         is_host,
-        host_address: format!("{}:{}", state.preferred_ip, DEFAULT_TCP_PORT),
+        host_address: format!("{}:{}", get_network_info().preferred_ip, DEFAULT_TCP_PORT),
     })
 }
 

@@ -43,7 +43,7 @@ npm run tauri build
 3. Selecione **"Criar Sala (Host)"**, informe seu nome e código da sala (ou use o código aleatório gerado).
 4. Clique em **"Criar Sala"**.
 5. O aplicativo detecta seu IP do Tailscale (ex: `100.125.168.118`) e inicia o servidor local embutido em segundo plano.
-6. Clique no botão **"🔗 Convidar"** no topo da tela para copiar o endereço do Tailscale e a sala para enviar aos seus amigos.
+6. Clique no botão **"🔗 Convidar"** no topo da tela para copiar um convite único e enviar aos seus amigos.
 
 ---
 
@@ -51,7 +51,7 @@ npm run tauri build
 1. Abra o aplicativo no outro computador conectado à mesma rede Tailscale.
 2. Clique em **"Entrar ou criar sala"**.
 3. Selecione **"Entrar em Sala"**.
-4. Informe seu nome, o código da sala e o endereço recebido (ex: `100.125.168.118:9765` ou nome MagicDNS).
+4. Informe seu nome e cole o convite recebido (ex: `sharezynho://100.125.168.118:9765/A3F91C`).
 5. Clique em **"Entrar"**.
 
 ---

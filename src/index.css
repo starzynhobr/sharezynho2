@@ -1,29 +1,39 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/bricolage-grotesque';
+@import '@fontsource-variable/instrument-sans';
 
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --color-root: #070c16;
-  --color-panel: #0e1523;
-  --color-main: #111a2c;
-  --color-card: #162238;
-  --color-card-hover: #1d2d4a;
-  --color-control: #1f2e48;
-  --color-control-hover: #293d60;
+  --color-root: #100f0d;
+  --color-panel: #171512;
+  --color-main: #100f0d;
+  --color-card: #1f1c18;
+  --color-card-hover: #292520;
+  --color-control: #2a2621;
+  --color-control-hover: #38332c;
 
-  --color-brand: #3b82f6;
-  --color-brand-hover: #60a5fa;
-  --color-brand-active: #2563eb;
+  --color-brand: #f5b53d;
+  --color-brand-hover: #ffc861;
+  --color-brand-active: #dc9c26;
+  --color-speaking: #5fd38d;
+  --color-danger: #f0604d;
+  --color-danger-hover: #d94c3a;
 
-  --color-border-subtle: #1c283d;
-  --color-border-hover: #3b82f6;
-  --color-border-strong: #2d3f5e;
+  --color-border-subtle: #2b2722;
+  --color-border-hover: #f5b53d;
+  --color-border-strong: #453f37;
 
-  --font-sans: Inter, Segoe UI, system-ui, sans-serif;
+  --color-slate-100: #f4f0e8;
+  --color-slate-200: #e2dcd1;
+  --color-slate-300: #cbc4b7;
+  --color-slate-400: #a59d90;
+  --color-slate-500: #7d766b;
+  --color-slate-600: #5b554c;
 
-  --shadow-glow-brand: 0 0 20px -3px rgba(59, 130, 246, 0.35);
-  --shadow-glow-success: 0 0 20px -3px rgba(16, 185, 129, 0.35);
-  --shadow-glow-danger: 0 0 20px -3px rgba(239, 68, 68, 0.35);
+  --font-sans: 'Instrument Sans Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Bricolage Grotesque Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, monospace;
 }
 
 @layer base {
@@ -32,13 +42,27 @@
   }
   html,
   body {
-    background-color: #070c16;
+    background-color: #100f0d;
     color: #f1f5f9;
     height: 100%;
     width: 100%;
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
   }
 }
 
@@ -51,9 +75,9 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #38332c;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #5b554c;
 }

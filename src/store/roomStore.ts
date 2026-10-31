@@ -85,20 +85,25 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
         });
     }
 
-    // 1. Network info
-    api
-      .getNetworkInfo()
-      .then((info) => {
-        if (!isCancelled) {
-          set({
-            networkInfo: info,
-            hostAddress: `${info.preferred_ip}:${info.tcp_port}`,
-          });
-        }
-      })
-      .catch((err: unknown) => {
-        console.error('Falha ao obter info de rede:', err);
-      });
+    // 1. Network info, refreshed while idle so a late Tailscale login is noticed
+    const refreshNetwork = () => {
+      if (get().currentRoom) return;
+      api
+        .getNetworkInfo()
+        .then((info) => {
+          if (!isCancelled) {
+            set({
+              networkInfo: info,
+              hostAddress: `${info.preferred_ip}:${info.tcp_port}`,
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          console.error('Falha ao obter info de rede:', err);
+        });
+    };
+    refreshNetwork();
+    const networkTimer = setInterval(refreshNetwork, 10000);
 
     // 2. Room State listener
     api
@@ -185,6 +190,7 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
 
     return () => {
       isCancelled = true;
+      clearInterval(networkTimer);
       unlistenReconnected?.();
       unlistenRoom?.();
       unlistenError?.();

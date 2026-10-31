@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { X, Copy, Check, Monitor, ArrowRight, Play } from 'lucide-react';
 import { api } from '../api';
+import { buildInvite, parseInvite } from '../invite';
 import type { AudioDevices } from '../types';
 
 interface JoinCreateModalProps {
@@ -25,24 +26,32 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
   const [room, setRoom] = useState(
     Math.floor(0x100000 + Math.random() * 0xefffff).toString(16).toUpperCase()
   );
-  const [address, setAddress] = useState(`${detectedIp}:${defaultPort}`);
+  const [invite, setInvite] = useState('');
+  const [inviteError, setInviteError] = useState(false);
   const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [] });
   const [inputDevice, setInputDevice] = useState('');
   const [outputDevice, setOutputDevice] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
+    setIsCreate(initialModeIsCreate);
+    setInviteError(false);
     api.getAudioDevices().then(setDevices).catch((err: unknown) => {
       console.error('Falha ao listar dispositivos de áudio:', err);
     });
-  }, [isOpen]);
+  }, [isOpen, initialModeIsCreate]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !room.trim()) return;
-    const submit = () => onSubmit(isCreate, name.trim(), room.trim().toUpperCase(), address.trim());
+    const parsed = isCreate ? { address: '', room: room.trim().toUpperCase() } : parseInvite(invite);
+    if (!parsed) {
+      setInviteError(true);
+      return;
+    }
+    if (!name.trim() || !parsed.room) return;
+    const submit = () => onSubmit(isCreate, name.trim(), parsed.room, parsed.address);
     api.setAudioDevices(inputDevice || null, outputDevice || null).finally(submit);
   };
 
@@ -68,7 +77,7 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
             type="button"
             onClick={() => setIsCreate(true)}
             className={`py-1.5 rounded-lg transition-all cursor-pointer ${
-              isCreate ? 'bg-brand text-white shadow-xs' : 'text-slate-400 hover:text-white'
+              isCreate ? 'bg-brand text-root shadow-xs' : 'text-slate-400 hover:text-white'
             }`}
           >
             Criar Sala (Host)
@@ -77,7 +86,7 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
             type="button"
             onClick={() => setIsCreate(false)}
             className={`py-1.5 rounded-lg transition-all cursor-pointer ${
-              !isCreate ? 'bg-brand text-white shadow-xs' : 'text-slate-400 hover:text-white'
+              !isCreate ? 'bg-brand text-root shadow-xs' : 'text-slate-400 hover:text-white'
             }`}
           >
             Entrar em Sala
@@ -100,34 +109,46 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Código da Sala
-            </label>
-            <input
-              type="text"
-              required
-              value={room}
-              onChange={(e) => setRoom(e.target.value.toUpperCase())}
-              className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-3.5 py-2 text-sm text-white font-mono tracking-wider outline-hidden transition-colors"
-            />
-          </div>
-
-          {!isCreate ? (
+          {isCreate ? (
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Endereço do Host (IP ou nome Tailscale:{defaultPort})
+                Código da Sala
               </label>
               <input
                 type="text"
                 required
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder={`100.x.y.z:${defaultPort}`}
-                className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-3.5 py-2 text-sm text-white font-mono outline-hidden transition-colors"
+                value={room}
+                onChange={(e) => setRoom(e.target.value.toUpperCase())}
+                className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-3.5 py-2 text-sm text-white font-mono tracking-wider outline-hidden transition-colors"
               />
             </div>
           ) : (
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Convite
+              </label>
+              <input
+                type="text"
+                required
+                autoFocus
+                value={invite}
+                onChange={(e) => {
+                  setInvite(e.target.value);
+                  setInviteError(false);
+                }}
+                placeholder="Cole aqui o convite recebido"
+                aria-invalid={inviteError}
+                className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-3.5 py-2 text-sm text-white font-mono placeholder-slate-500 outline-hidden transition-colors"
+              />
+              {inviteError && (
+                <p className="mt-1.5 text-xs text-danger">
+                  Convite inválido. Copie novamente o convite completo.
+                </p>
+              )}
+            </div>
+          )}
+
+          {isCreate && (
             <div className="p-3 rounded-xl bg-root/60 border border-border-subtle text-xs text-slate-400 flex flex-col gap-1">
               <span className="font-semibold text-slate-300">Endereço Local:</span>
               <span className="font-mono text-brand font-medium">
@@ -176,7 +197,7 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-brand/20 transition-all cursor-pointer"
+              className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-root text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
             >
               {isCreate ? <Play className="w-3.5 h-3.5 fill-current" /> : <ArrowRight className="w-3.5 h-3.5" />}
               {isCreate ? 'Iniciar Sala' : 'Conectar'}
@@ -205,7 +226,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
 
   if (!isOpen) return null;
 
-  const inviteText = `Sharezynho Convite:\nEndereço: ${hostAddress}\nSala: #${room}`;
+  const inviteText = buildInvite(hostAddress, room);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(inviteText);
@@ -227,26 +248,25 @@ export const InviteModal: React.FC<InviteModalProps> = ({
         </div>
 
         <p className="text-xs text-slate-400 leading-relaxed">
-          Compartilhe os dados abaixo com quem você deseja convidar pela sua rede Tailscale:
+          Envie este convite. A pessoa só precisa colar em “Entrar com um convite”.
         </p>
 
-        <div className="bg-root border border-border-subtle rounded-xl p-3 flex flex-col gap-2 font-mono text-xs">
-          <div>
-            <span className="text-slate-500 block text-[10px] font-sans font-semibold">Endereço:</span>
-            <span className="text-slate-200 select-text">{hostAddress}</span>
-          </div>
-          <div>
-            <span className="text-slate-500 block text-[10px] font-sans font-semibold">Código da Sala:</span>
-            <span className="text-brand font-bold text-sm select-text">#{room}</span>
-          </div>
+        <div className="bg-root border border-border-subtle rounded-xl p-3 font-mono text-xs text-slate-200 break-all select-text">
+          {inviteText}
         </div>
+
+        {hostAddress.startsWith('100.') ? null : (
+          <p className="text-xs text-brand leading-relaxed">
+            Tailscale desconectado: este convite só funciona na sua rede local.
+          </p>
+        )}
 
         <button
           onClick={handleCopy}
-          className="w-full py-2.5 px-4 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-brand/20 transition-all cursor-pointer"
+          className="w-full py-2.5 px-4 rounded-xl bg-brand hover:bg-brand-hover text-root text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
         >
-          {copied ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
-          {copied ? 'Copiado para a área de transferência!' : 'Copiar dados do convite'}
+          {copied ? <Check className="w-4 h-4 text-root" /> : <Copy className="w-4 h-4" />}
+          {copied ? 'Convite copiado!' : 'Copiar convite'}
         </button>
       </div>
     </div>
@@ -284,7 +304,7 @@ export const MonitorPickerModal: React.FC<MonitorPickerModalProps> = ({
         </div>
 
         <p className="text-xs text-slate-400">
-          Qual monitor você gostaria de transmitir com GPU DirectX?
+          Qual monitor você quer transmitir?
         </p>
 
         <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto">
@@ -316,7 +336,7 @@ export const MonitorPickerModal: React.FC<MonitorPickerModalProps> = ({
           </button>
           <button
             onClick={() => onSelectMonitor(selectedIndex)}
-            className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-all cursor-pointer"
+            className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-root text-xs font-bold transition-all cursor-pointer"
           >
             Iniciar Transmissão
           </button>
