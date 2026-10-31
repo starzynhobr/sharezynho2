@@ -29,6 +29,24 @@ pub fn detect_tailscale_ipv4() -> Option<String> {
         .iter()
         .filter(|path| Path::new(path).is_file())
         .find_map(|path| query_tailscale_binary(path).ok())
+        .or_else(detect_tailscale_interface)
+}
+
+/// Finds the address directly on the network interfaces, for when the CLI is unusable.
+fn detect_tailscale_interface() -> Option<String> {
+    if_addrs::get_if_addrs()
+        .ok()?
+        .into_iter()
+        .find_map(|interface| match interface.ip() {
+            std::net::IpAddr::V4(ip) if is_tailscale_ipv4(ip) => Some(ip.to_string()),
+            _ => None,
+        })
+}
+
+/// Tailscale assigns addresses from the CGNAT range 100.64.0.0/10.
+fn is_tailscale_ipv4(ip: Ipv4Addr) -> bool {
+    let [first, second, ..] = ip.octets();
+    first == 100 && (64..128).contains(&second)
 }
 
 fn query_tailscale_binary(cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -76,4 +94,16 @@ pub fn preferred_host() -> String {
     detect_tailscale_ipv4()
         .or_else(detect_lan_ipv4)
         .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_tailscale_range() {
+        assert!(is_tailscale_ipv4(Ipv4Addr::new(100, 96, 249, 47)));
+        assert!(!is_tailscale_ipv4(Ipv4Addr::new(100, 128, 0, 1)));
+        assert!(!is_tailscale_ipv4(Ipv4Addr::new(192, 168, 100, 205)));
+    }
 }
