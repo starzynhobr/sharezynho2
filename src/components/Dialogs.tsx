@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { X, Copy, Check, Monitor, ArrowRight, Play } from 'lucide-react';
 import { api } from '../api';
+import { Select } from './Select';
 import { buildInvite, parseInvite } from '../invite';
 import type { AudioDevices } from '../types';
 
@@ -158,32 +159,20 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
           )}
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="min-w-0">
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Microfone</label>
-              <select
-                value={inputDevice}
-                onChange={(e) => setInputDevice(e.target.value)}
-                className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-2.5 py-2 text-xs text-white outline-hidden transition-colors"
-              >
-                <option value="">Padrão do sistema</option>
-                {devices.inputs.map((device) => (
-                  <option key={device} value={device}>{device}</option>
-                ))}
-              </select>
-            </div>
-            <div className="min-w-0">
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Saída de áudio</label>
-              <select
-                value={outputDevice}
-                onChange={(e) => setOutputDevice(e.target.value)}
-                className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-2.5 py-2 text-xs text-white outline-hidden transition-colors"
-              >
-                <option value="">Padrão do sistema</option>
-                {devices.outputs.map((device) => (
-                  <option key={device} value={device}>{device}</option>
-                ))}
-              </select>
-            </div>
+            <Select
+              label="Microfone"
+              value={inputDevice}
+              defaultLabel="Padrão do sistema"
+              options={devices.inputs}
+              onChange={setInputDevice}
+            />
+            <Select
+              label="Saída de áudio"
+              value={outputDevice}
+              defaultLabel="Padrão do sistema"
+              options={devices.outputs}
+              onChange={setOutputDevice}
+            />
           </div>
 
           {/* Action Buttons */}

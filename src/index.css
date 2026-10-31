@@ -52,11 +52,16 @@
   }
 }
 
-button:focus-visible,
-input:focus-visible,
-select:focus-visible {
+button:focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
+}
+
+/* These controls show focus on their own border */
+input:focus-visible,
+[data-select]:focus-visible {
+  outline: none;
+  border-color: var(--color-brand);
 }
 
 @media (prefers-reduced-motion: reduce) {

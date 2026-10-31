@@ -1,6 +1,6 @@
 [package]
 name = "sharezynho"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [build-dependencies]
@@ -20,3 +20,4 @@ zstd = "0.14.2"
 sonora = "0.2.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"

@@ -15,7 +15,20 @@ pub fn run() {
     let app_state = AppState::new();
     let latest_frame = app_state.latest_frame.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Dev builds stay exempt so they can run beside the installed app
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(app_state)
