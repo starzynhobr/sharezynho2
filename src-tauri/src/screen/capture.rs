@@ -17,6 +17,8 @@ const MAX_FRAME_BYTES: usize = 150 * 1024;
 const MIN_FRAME_BYTES: usize = 90 * 1024;
 const MIN_QUALITY: u8 = 35;
 const MAX_QUALITY: u8 = 65;
+// The sender's own preview reuses every Nth encoded frame, about 5 FPS at most
+const PREVIEW_FRAME_INTERVAL: u32 = 6;
 
 pub struct ScreenCapture {
     pub is_sharing: Arc<AtomicBool>,
@@ -31,6 +33,7 @@ pub(super) struct CaptureFlags {
     frame_counter: std::sync::atomic::AtomicU32,
     next_frame_time: std::sync::Mutex<Instant>,
     quality: std::sync::atomic::AtomicU8,
+    preview_frame: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 }
 
 impl CaptureFlags {
@@ -99,6 +102,10 @@ impl CaptureFlags {
 
             let _ = self.packet_tx.try_send(packet);
         }
+
+        if frame_id % PREVIEW_FRAME_INTERVAL == 1 {
+            *self.preview_frame.lock().unwrap() = Some(jpeg_bytes);
+        }
     }
 }
 
@@ -134,6 +141,7 @@ impl ScreenCapture {
     pub fn start(
         monitor_index: usize,
         packet_tx: mpsc::Sender<Vec<u8>>,
+        preview_frame: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let is_sharing = Arc::new(AtomicBool::new(true));
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -146,6 +154,7 @@ impl ScreenCapture {
             frame_counter: std::sync::atomic::AtomicU32::new(1),
             next_frame_time: std::sync::Mutex::new(Instant::now()),
             quality: std::sync::atomic::AtomicU8::new(MAX_QUALITY),
+            preview_frame,
         });
 
         backend::start(monitor_index, flags)?;

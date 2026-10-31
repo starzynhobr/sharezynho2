@@ -320,8 +320,12 @@ impl ClientSession {
     }
 
     pub fn start_screen_share(&mut self, monitor_idx: usize) -> Result<(), String> {
-        let cap = ScreenCapture::start(monitor_idx, self.screen_packet_tx.clone())
-            .map_err(|e| format!("Falha ao iniciar compartilhamento: {}", e))?;
+        let cap = ScreenCapture::start(
+            monitor_idx,
+            self.screen_packet_tx.clone(),
+            self.latest_screen_frame.clone(),
+        )
+        .map_err(|e| format!("Falha ao iniciar compartilhamento: {}", e))?;
         self.screen_capture = Some(cap);
         self.is_sharing_screen.store(true, Ordering::Relaxed);
 
