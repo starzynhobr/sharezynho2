@@ -64,6 +64,20 @@ npm run tauri build
 
 ---
 
+## 📦 Gerar e Publicar uma Versão
+
+```powershell
+# Gera, assina e publica; quem tem o app instalado atualiza ao abrir
+.\scripts\release.ps1 -Version 0.2.0 -Notes "O que mudou"
+
+# Apenas gera o instalador em src-tauri/target/release/bundle/nsis
+.\scripts\release.ps1 -Version 0.2.0 -BuildOnly
+```
+
+A chave privada e a senha ficam em `~/.tauri/sharezynho.key` e `.password`. Sem ela, nenhuma atualização poderá ser publicada para quem já instalou.
+
+---
+
 ## 🧪 Testes
 
 Para rodar a suíte de testes automatizados (unitários e ponta a ponta):

@@ -16,6 +16,8 @@ pub fn run() {
     let latest_frame = app_state.latest_frame.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(app_state)
         .setup(move |app| {
             // Start background video MJPEG streaming server for webview

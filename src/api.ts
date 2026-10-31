@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check } from '@tauri-apps/plugin-updater';
 import type { AudioDevices, NetworkInfo, RoomJoinedInfo, RoomStatePayload } from './types';
 
 export const api = {
@@ -9,6 +11,14 @@ export const api = {
       await getCurrentWindow().show();
     } catch {}
   },
+  installAvailableUpdate: async (onStart: (version: string) => void): Promise<void> => {
+    const update = await check();
+    if (!update) return;
+    onStart(update.version);
+    await update.downloadAndInstall();
+    await relaunch();
+  },
+
   getNetworkInfo: async (): Promise<NetworkInfo> => {
     return invoke('get_network_info');
   },

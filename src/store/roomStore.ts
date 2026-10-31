@@ -74,6 +74,17 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
     let unlistenDisc: (() => void) | undefined;
     let unlistenReconnected: (() => void) | undefined;
 
+    // Installed builds update themselves on startup, before any call begins
+    if (import.meta.env.PROD) {
+      api
+        .installAvailableUpdate((version) => {
+          set({ statusText: `Atualizando para a versão ${version}...` });
+        })
+        .catch((err: unknown) => {
+          console.error('Falha ao atualizar:', err);
+        });
+    }
+
     // 1. Network info
     api
       .getNetworkInfo()

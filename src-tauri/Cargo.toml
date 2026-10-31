@@ -18,3 +18,5 @@ tokio = { version = "1.53.2", features = ["full"] }
 windows-capture = "2.0.1"
 zstd = "0.14.2"
 sonora = "0.2.0"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
