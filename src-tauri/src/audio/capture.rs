@@ -1,8 +1,10 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+const TARGET_SAMPLE_RATE: u32 = 16000;
 
 pub struct AudioCapture {
     pub is_muted: Arc<AtomicBool>,
@@ -14,9 +16,7 @@ impl AudioCapture {
         audio_packet_tx: mpsc::Sender<Vec<u8>>,
         speaking_status_tx: mpsc::Sender<bool>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let host = cpal::default_host();
-        let device = host
-            .default_input_device()
+        let device = super::selected_input_device()
             .ok_or("Nenhum dispositivo de entrada de áudio encontrado")?;
 
         let config = device.default_input_config()?;
@@ -30,6 +30,9 @@ impl AudioCapture {
         let mut sample_accumulator = Vec::<i16>::with_capacity(320);
         let mut last_speaking_time = Instant::now() - Duration::from_secs(10);
         let mut was_speaking = false;
+        let mut resample_sum = 0.0f32;
+        let mut resample_count = 0u32;
+        let mut resample_phase = 0u32;
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => {
@@ -51,10 +54,18 @@ impl AudioCapture {
                             .map(|frame| frame.iter().sum::<f32>() / channels as f32)
                             .collect();
 
-                        // Downsample if sample_rate is ~48000 to ~16000
-                        let step = (sample_rate / 16000).max(1) as usize;
-                        for chunk in mono_samples.chunks(step) {
-                            let avg: f32 = chunk.iter().sum::<f32>() / chunk.len() as f32;
+                        // Resample from the device rate to 16kHz by averaging
+                        for sample in mono_samples {
+                            resample_sum += sample;
+                            resample_count += 1;
+                            resample_phase += TARGET_SAMPLE_RATE;
+                            if resample_phase < sample_rate {
+                                continue;
+                            }
+                            resample_phase -= sample_rate;
+                            let avg = resample_sum / resample_count as f32;
+                            resample_sum = 0.0;
+                            resample_count = 0;
                             // Clamp and convert to i16
                             let clamped = (avg.clamp(-1.0, 1.0) * 32767.0) as i16;
                             sample_accumulator.push(clamped);

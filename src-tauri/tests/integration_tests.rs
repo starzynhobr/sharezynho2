@@ -102,6 +102,11 @@ async fn test_room_server_and_client_end_to_end() {
     assert_eq!(bob.display_name, "Bob");
     assert!(!bob.is_host);
 
+    // Wrong room code is refused
+    let (wrong_tx, _wrong_rx) = mpsc::channel();
+    let wrong_room = ClientSession::connect(&server_addr, "OTHER", "Eve", false, wrong_tx).await;
+    assert!(wrong_room.is_err());
+
     // 4. Verify Alice receives RoomState with both participants
     sleep(Duration::from_millis(100)).await;
 

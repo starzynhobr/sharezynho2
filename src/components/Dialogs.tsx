@@ -1,5 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { X, Copy, Check, Monitor, ArrowRight, Play } from 'lucide-react';
+import { api } from '../api';
+import type { AudioDevices } from '../types';
 
 interface JoinCreateModalProps {
   isOpen: boolean;
@@ -24,13 +26,24 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
     Math.floor(0x100000 + Math.random() * 0xefffff).toString(16).toUpperCase()
   );
   const [address, setAddress] = useState(`${detectedIp}:${defaultPort}`);
+  const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [] });
+  const [inputDevice, setInputDevice] = useState('');
+  const [outputDevice, setOutputDevice] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    api.getAudioDevices().then(setDevices).catch((err: unknown) => {
+      console.error('Falha ao listar dispositivos de áudio:', err);
+    });
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !room.trim()) return;
-    onSubmit(isCreate, name.trim(), room.trim().toUpperCase(), address.trim());
+    const submit = () => onSubmit(isCreate, name.trim(), room.trim().toUpperCase(), address.trim());
+    api.setAudioDevices(inputDevice || null, outputDevice || null).finally(submit);
   };
 
   return (
@@ -103,7 +116,7 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
           {!isCreate ? (
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Endereço do Host (Tailscale IP:{defaultPort})
+                Endereço do Host (IP ou nome Tailscale:{defaultPort})
               </label>
               <input
                 type="text"
@@ -122,6 +135,35 @@ export const JoinCreateModal: React.FC<JoinCreateModalProps> = ({
               </span>
             </div>
           )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Microfone</label>
+              <select
+                value={inputDevice}
+                onChange={(e) => setInputDevice(e.target.value)}
+                className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-2.5 py-2 text-xs text-white outline-hidden transition-colors"
+              >
+                <option value="">Padrão do sistema</option>
+                {devices.inputs.map((device) => (
+                  <option key={device} value={device}>{device}</option>
+                ))}
+              </select>
+            </div>
+            <div className="min-w-0">
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Saída de áudio</label>
+              <select
+                value={outputDevice}
+                onChange={(e) => setOutputDevice(e.target.value)}
+                className="w-full bg-root border border-border-subtle focus:border-brand rounded-xl px-2.5 py-2 text-xs text-white outline-hidden transition-colors"
+              >
+                <option value="">Padrão do sistema</option>
+                {devices.outputs.map((device) => (
+                  <option key={device} value={device}>{device}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
           {/* Action Buttons */}
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border-subtle/60">

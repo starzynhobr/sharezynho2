@@ -72,6 +72,7 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
     let unlistenRoom: (() => void) | undefined;
     let unlistenError: (() => void) | undefined;
     let unlistenDisc: (() => void) | undefined;
+    let unlistenReconnected: (() => void) | undefined;
 
     // 1. Network info
     api
@@ -153,8 +154,27 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
         console.error('Falha ao registrar onDisconnected:', err);
       });
 
+    // 5. Reconnected listener (screen share does not survive a reconnect)
+    api
+      .onReconnected(() => {
+        if (!isCancelled) {
+          set({ isSharingScreen: false, statusText: 'Reconectado à sala' });
+        }
+      })
+      .then((un) => {
+        if (isCancelled) {
+          un();
+        } else {
+          unlistenReconnected = un;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error('Falha ao registrar onReconnected:', err);
+      });
+
     return () => {
       isCancelled = true;
+      unlistenReconnected?.();
       unlistenRoom?.();
       unlistenError?.();
       unlistenDisc?.();

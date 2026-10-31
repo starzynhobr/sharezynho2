@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::protocol::{
-    ClientMessage, ParticipantInfo, ServerMessage, TAG_AUDIO, TAG_VIDEO, serialize_server_msg,
+    ClientMessage, PEER_TIMEOUT_SECS, ParticipantInfo, ServerMessage, TAG_AUDIO, TAG_VIDEO,
+    serialize_server_msg,
 };
 
 struct Participant {
@@ -111,6 +113,10 @@ impl RoomServer {
 
         let addrs: Vec<SocketAddr> = {
             let guard = self.state.lock().await;
+            // Only admitted participants may use the relay
+            if !guard.participants.values().any(|p| p.udp_addr == src_addr) {
+                return;
+            }
             guard
                 .participants
                 .values()
@@ -160,13 +166,23 @@ impl RoomServer {
         let (tcp_tx, mut tcp_rx) = mpsc::channel::<String>(32);
 
         // Determine if first participant in room is host
-        let is_host = {
+        let (is_host, wrong_room) = {
             let mut guard = state.lock().await;
             if guard.room_name.is_empty() {
                 guard.room_name = room.clone();
             }
-            guard.participants.is_empty()
+            (guard.participants.is_empty(), guard.room_name != room)
         };
+
+        if wrong_room {
+            let error = ServerMessage::Error {
+                message: "Código da sala incorreto".to_string(),
+            };
+            writer
+                .write_all(serialize_server_msg(&error).as_bytes())
+                .await?;
+            return Ok(());
+        }
 
         // Register participant
         {
@@ -214,8 +230,8 @@ impl RoomServer {
             let line = tokio::select! {
                 // Closing the socket tells guests that the room has ended
                 _ = shutdown_rx.changed() => break,
-                res = lines.next_line() => match res {
-                    Ok(Some(line)) => line,
+                res = tokio::time::timeout(Duration::from_secs(PEER_TIMEOUT_SECS), lines.next_line()) => match res {
+                    Ok(Ok(Some(line))) => line,
                     _ => break,
                 },
             };

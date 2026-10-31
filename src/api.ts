@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { NetworkInfo, RoomJoinedInfo, RoomStatePayload } from './types';
+import type { AudioDevices, NetworkInfo, RoomJoinedInfo, RoomStatePayload } from './types';
 
 export const api = {
   showWindow: async (): Promise<void> => {
@@ -43,6 +43,18 @@ export const api = {
 
   stopScreenShare: async (): Promise<void> => {
     return invoke('stop_screen_share');
+  },
+
+  getAudioDevices: async (): Promise<AudioDevices> => {
+    return invoke('get_audio_devices');
+  },
+
+  setAudioDevices: async (input: string | null, output: string | null): Promise<void> => {
+    return invoke('set_audio_devices', { input, output });
+  },
+
+  onReconnected: (callback: () => void): Promise<UnlistenFn> => {
+    return listen('reconnected', () => callback());
   },
 
   onRoomState: (callback: (payload: RoomStatePayload) => void): Promise<UnlistenFn> => {

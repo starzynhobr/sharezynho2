@@ -1,4 +1,4 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,19 +7,19 @@ pub type BufferPusher = Arc<dyn Fn(u32, &[u8]) + Send + Sync>;
 
 pub struct AudioPlayback {
     pub is_deafened: Arc<AtomicBool>,
+    output_rate: u32,
     buffers: Arc<Mutex<HashMap<u32, VecDeque<f32>>>>,
     _stream: cpal::Stream,
 }
 
 impl AudioPlayback {
     pub fn start() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
+        let device = super::selected_output_device()
             .ok_or("Nenhum dispositivo de saída de áudio encontrado")?;
 
         let config = device.default_output_config()?;
         let channels = config.channels() as usize;
+        let output_rate = config.sample_rate();
 
         let is_deafened = Arc::new(AtomicBool::new(false));
         let deafened_clone = is_deafened.clone();
@@ -62,36 +62,50 @@ impl AudioPlayback {
 
         Ok(Self {
             is_deafened,
+            output_rate,
             buffers,
             _stream: stream,
         })
     }
 
     /// Returns a closure that enqueues a speaker's 16kHz mono 16-bit PCM samples,
-    /// upsampling to 48kHz for playback.
+    /// resampling to the output device rate.
     pub fn clone_buffer_pusher(&self) -> BufferPusher {
         let buffers = self.buffers.clone();
         let is_deafened = self.is_deafened.clone();
+        let output_rate = self.output_rate as usize;
         Arc::new(move |sender_id: u32, raw_bytes: &[u8]| {
             if is_deafened.load(Ordering::Relaxed) {
                 return;
             }
-            let mut samples_48k = Vec::with_capacity(raw_bytes.len() / 2 * 3);
-            for chunk in raw_bytes.as_chunks::<2>().0 {
-                let s_i16 = i16::from_le_bytes([chunk[0], chunk[1]]);
-                let s_f32 = (s_i16 as f32) / 32768.0;
-                samples_48k.push(s_f32);
-                samples_48k.push(s_f32);
-                samples_48k.push(s_f32);
+            let samples: Vec<f32> = raw_bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| i16::from_le_bytes(*chunk) as f32 / 32768.0)
+                .collect();
+            if samples.is_empty() {
+                return;
             }
+            // Linear interpolation from 16kHz to the output rate
+            let output_len = samples.len() * output_rate / 16000;
+            let resampled: Vec<f32> = (0..output_len)
+                .map(|i| {
+                    let position = i as f32 * 16000.0 / output_rate as f32;
+                    let index = position as usize;
+                    let current = samples[index.min(samples.len() - 1)];
+                    let next = samples[(index + 1).min(samples.len() - 1)];
+                    current + (next - current) * position.fract()
+                })
+                .collect();
             let mut queues = buffers.lock().unwrap();
             let q = queues.entry(sender_id).or_default();
             // Limit queue length to prevent unbounded lag
             let len = q.len();
-            if len > 14400 {
-                q.drain(..len - 7200);
+            if len > output_rate * 3 / 10 {
+                q.drain(..len - output_rate * 15 / 100);
             }
-            q.extend(samples_48k);
+            q.extend(resampled);
         })
     }
 }

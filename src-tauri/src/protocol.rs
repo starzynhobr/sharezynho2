@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_TCP_PORT: u16 = 9765;
 pub const DEFAULT_UDP_PORT: u16 = 9766;
 
+pub const PING_INTERVAL_SECS: u64 = 5;
+pub const PEER_TIMEOUT_SECS: u64 = 15;
+
 pub const TAG_AUDIO: u8 = 0x01;
 pub const TAG_VIDEO: u8 = 0x02;
 

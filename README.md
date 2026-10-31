@@ -2,7 +2,7 @@
 
 Aplicativo desktop ultraleve e de alta performance para compartilhamento de tela e chat de voz em tempo real, utilizando a rede privada do **Tailscale** como servidor local mesh P2P.
 
-Construído 100% em **Rust**, sem dependências externas pesadas (sem Python, sem PySide6/Qt, sem download de binários externos de LiveKit).
+Backend em **Rust** e interface em **Tauri 2 + React**, sem dependências externas pesadas (sem Python, sem PySide6/Qt, sem download de binários externos de LiveKit).
 
 ---
 
@@ -16,7 +16,7 @@ Construído 100% em **Rust**, sem dependências externas pesadas (sem Python, se
 | **Servidor de Mídia** | Processo Go externo (`livekit-server.exe` ~60MB) | **Servidor embutido Tokio (TCP 9765 + UDP 9766)** |
 | **Captura de Tela** | Python DXcam com conversões pesadas | **Windows Graphics Capture (DirectX hardware accelerated)** |
 | **Áudio / Voz** | sounddevice + libwebrtc C++ bindings | **WASAPI nativo via `cpal` com VAD e buffer de baixa latência** |
-| **Interface Gráfica** | PySide6 / Qt6 (pesado, lento) | **`eframe` / `egui` nativo GPU (leve e fluido)** |
+| **Interface Gráfica** | PySide6 / Qt6 (pesado, lento) | **Tauri 2 + React 19 + Tailwind CSS v4** |
 
 ---
 
@@ -27,13 +27,12 @@ Construído 100% em **Rust**, sem dependências externas pesadas (sem Python, se
 No diretório do projeto:
 
 ```powershell
-# Execução direta com Cargo
-cargo run --release
-```
+# Instala dependências e abre em modo de desenvolvimento
+npm install
+npm run tauri dev
 
-Ou execute diretamente o executável compilado:
-```powershell
-.\target\release\sharezynho.exe
+# Gera o executável de produção
+npm run tauri build
 ```
 
 ---
@@ -52,7 +51,7 @@ Ou execute diretamente o executável compilado:
 1. Abra o aplicativo no outro computador conectado à mesma rede Tailscale.
 2. Clique em **"Entrar ou criar sala"**.
 3. Selecione **"Entrar em Sala"**.
-4. Informe seu nome, o código da sala e o endereço recebido (ex: `100.125.168.118:9765`).
+4. Informe seu nome, o código da sala e o endereço recebido (ex: `100.125.168.118:9765` ou nome MagicDNS).
 5. Clique em **"Entrar"**.
 
 ---
@@ -60,7 +59,7 @@ Ou execute diretamente o executável compilado:
 ## 🛠️ Controles na Chamada (Dock Inferior)
 - 🎤 / 🔇 **Microfone**: Ativa ou silencia seu microfone com detecção de voz (VAD) automática.
 - 🎧 / 🔇 **Áudio / Deafen**: Silencia o áudio recebido dos outros participantes.
-- 🖥️ **Compartilhar Tela**: Transmite seu monitor selecionado via hardware acceleration DirectX em 30 FPS.
+- 🖥️ **Compartilhar Tela**: Transmite seu monitor selecionado via hardware acceleration DirectX em até 30 FPS, limitado a 1920 px de largura e cerca de 4 MB/s.
 - 📞 **Sair da Sala**: Encerra a sessão e o servidor local de forma limpa.
 
 ---
@@ -70,5 +69,5 @@ Ou execute diretamente o executável compilado:
 Para rodar a suíte de testes automatizados (unitários e ponta a ponta):
 
 ```powershell
-cargo test
+cargo test --manifest-path src-tauri/Cargo.toml
 ```

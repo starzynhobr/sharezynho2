@@ -17,6 +17,12 @@ use crate::protocol::TAG_VIDEO;
 
 const CHUNK_SIZE: usize = 1200;
 const TARGET_FPS: u64 = 30;
+const MAX_WIDTH: usize = 1920;
+const MAX_BYTES_PER_SEC: u64 = 4_000_000;
+const MAX_FRAME_BYTES: usize = 150 * 1024;
+const MIN_FRAME_BYTES: usize = 90 * 1024;
+const MIN_QUALITY: u8 = 35;
+const MAX_QUALITY: u8 = 65;
 
 pub struct ScreenCapture {
     pub is_sharing: Arc<AtomicBool>,
@@ -29,7 +35,8 @@ struct CaptureFlags {
     packet_tx: mpsc::Sender<Vec<u8>>,
     stream_id: u32,
     frame_counter: std::sync::atomic::AtomicU32,
-    last_frame_time: std::sync::Mutex<Instant>,
+    next_frame_time: std::sync::Mutex<Instant>,
+    quality: std::sync::atomic::AtomicU8,
     temp_buf: std::sync::Mutex<Vec<u8>>,
 }
 
@@ -59,17 +66,17 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             return Ok(());
         }
 
-        // Rate limit to target FPS (~30 FPS = ~33ms)
+        // Rate limit to target FPS and the bandwidth budget
         {
-            let mut last_time = self.flags.last_frame_time.lock().unwrap();
-            if last_time.elapsed() < Duration::from_millis(1000 / TARGET_FPS) {
+            let next_time = self.flags.next_frame_time.lock().unwrap();
+            if Instant::now() < *next_time {
                 return Ok(());
             }
-            *last_time = Instant::now();
         }
 
-        let width = frame.width();
-        let height = frame.height();
+        let frame_start = Instant::now();
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
         let buffer = match frame.buffer() {
             Ok(b) => b,
             Err(_) => return Ok(()),
@@ -80,18 +87,40 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
 
         // Encode to JPEG
         let mut jpeg_bytes = Vec::with_capacity(64 * 1024);
-        let encoder = jpeg_encoder::Encoder::new(&mut jpeg_bytes, 65);
+        let factor = width.div_ceil(MAX_WIDTH).max(1);
+        let scaled = (factor > 1).then(|| downscale_rgba(raw_pixels, width, height, factor));
+        let (pixels, out_width, out_height) = match &scaled {
+            Some(pixels) => (pixels.as_slice(), width / factor, height / factor),
+            None => (raw_pixels, width, height),
+        };
+        let quality = self.flags.quality.load(Ordering::Relaxed);
+        let encoder = jpeg_encoder::Encoder::new(&mut jpeg_bytes, quality);
         if encoder
             .encode(
-                raw_pixels,
-                width as u16,
-                height as u16,
+                pixels,
+                out_width as u16,
+                out_height as u16,
                 jpeg_encoder::ColorType::Rgba,
             )
             .is_err()
         {
             return Ok(());
         }
+
+        if jpeg_bytes.len() > MAX_FRAME_BYTES {
+            self.flags.quality.store(
+                quality.saturating_sub(5).max(MIN_QUALITY),
+                Ordering::Relaxed,
+            );
+        } else if jpeg_bytes.len() < MIN_FRAME_BYTES {
+            self.flags
+                .quality
+                .store((quality + 5).min(MAX_QUALITY), Ordering::Relaxed);
+        }
+
+        let budget = Duration::from_millis(jpeg_bytes.len() as u64 * 1000 / MAX_BYTES_PER_SEC);
+        *self.flags.next_frame_time.lock().unwrap() =
+            frame_start + budget.max(Duration::from_millis(1000 / TARGET_FPS));
 
         let frame_id = self.flags.frame_counter.fetch_add(1, Ordering::Relaxed);
 
@@ -115,6 +144,30 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     fn on_closed(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
+}
+
+/// Shrinks an RGBA image by an integer factor, averaging each pixel block.
+fn downscale_rgba(pixels: &[u8], width: usize, height: usize, factor: usize) -> Vec<u8> {
+    let out_width = width / factor;
+    let out_height = height / factor;
+    let block_area = (factor * factor) as u32;
+    let mut output = Vec::with_capacity(out_width * out_height * 4);
+    for out_y in 0..out_height {
+        for out_x in 0..out_width {
+            let mut sum = [0u32; 4];
+            for y in 0..factor {
+                let row = (out_y * factor + y) * width * 4;
+                for x in 0..factor {
+                    let offset = row + (out_x * factor + x) * 4;
+                    for (total, value) in sum.iter_mut().zip(&pixels[offset..offset + 4]) {
+                        *total += *value as u32;
+                    }
+                }
+            }
+            output.extend(sum.map(|total| (total / block_area) as u8));
+        }
+    }
+    output
 }
 
 impl ScreenCapture {
@@ -147,7 +200,8 @@ impl ScreenCapture {
             packet_tx,
             stream_id: fastrand::u32(1..),
             frame_counter: std::sync::atomic::AtomicU32::new(1),
-            last_frame_time: std::sync::Mutex::new(Instant::now()),
+            next_frame_time: std::sync::Mutex::new(Instant::now()),
+            quality: std::sync::atomic::AtomicU8::new(MAX_QUALITY),
             temp_buf: std::sync::Mutex::new(Vec::new()),
         });
 

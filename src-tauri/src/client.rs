@@ -1,15 +1,19 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, watch};
 
 use crate::audio::{AudioCapture, AudioPlayback};
 use crate::protocol::{
-    ClientMessage, ParticipantInfo, ServerMessage, TAG_AUDIO, TAG_VIDEO, serialize_client_msg,
+    ClientMessage, PEER_TIMEOUT_SECS, PING_INTERVAL_SECS, ParticipantInfo, ServerMessage,
+    TAG_AUDIO, TAG_VIDEO, serialize_client_msg,
 };
 use crate::screen::{ScreenCapture, ScreenReceiver};
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub enum ClientEvent {
     SessionConnected(Box<ClientSession>),
@@ -27,6 +31,7 @@ pub struct ClientSession {
     pub participant_id: String,
     pub room_name: String,
     pub display_name: String,
+    pub server_addr: String,
     pub is_host: bool,
     tcp_tx: mpsc::Sender<String>,
     audio_capture: Option<AudioCapture>,
@@ -48,7 +53,11 @@ impl ClientSession {
         is_host: bool,
         event_tx: std::sync::mpsc::Sender<ClientEvent>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let stream = TcpStream::connect(server_addr).await?;
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(server_addr))
+            .await
+            .map_err(|_| "Tempo esgotado ao conectar no host")??;
+        // Uses the resolved address, since server_addr may be a hostname
+        let remote_ip = stream.peer_addr()?.ip();
         let (reader, mut writer) = stream.into_split();
         let mut lines = BufReader::new(reader).lines();
 
@@ -82,12 +91,7 @@ impl ClientSession {
             _ => return Err("Resposta de admissão inválida".into()),
         };
 
-        // Determine remote UDP relay address based on server IP
-        let remote_ip = match server_addr.split(':').next() {
-            Some(ip) if !ip.is_empty() => ip,
-            _ => "127.0.0.1",
-        };
-        let relay_udp_addr: SocketAddr = format!("{}:{}", remote_ip, relay_port).parse()?;
+        let relay_udp_addr = SocketAddr::new(remote_ip, relay_port);
 
         let (tcp_tx, mut tcp_rx) = mpsc::channel::<String>(32);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -157,7 +161,7 @@ impl ClientSession {
 
         // Setup Audio & Screen Sender channels
         let (audio_packet_tx, mut audio_packet_rx) = mpsc::channel::<Vec<u8>>(64);
-        let (screen_packet_tx, mut screen_packet_rx) = mpsc::channel::<Vec<u8>>(128);
+        let (screen_packet_tx, mut screen_packet_rx) = mpsc::channel::<Vec<u8>>(1024);
         let (speaking_status_tx, mut speaking_status_rx) = mpsc::channel::<bool>(16);
 
         // UDP Sender task
@@ -205,6 +209,21 @@ impl ClientSession {
             }
         });
 
+        // Keepalive so both sides can detect a dead connection
+        let ping_tcp_tx = tcp_tx.clone();
+        let mut ping_shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
+            loop {
+                tokio::select! {
+                    _ = ping_shutdown_rx.changed() => break,
+                    _ = interval.tick() => {
+                        let _ = ping_tcp_tx.try_send(serialize_client_msg(&ClientMessage::Ping));
+                    }
+                }
+            }
+        });
+
         // Start Audio Capture
         let audio_capture = match AudioCapture::start(audio_packet_tx, speaking_status_tx) {
             Ok(capture) => Some(capture),
@@ -227,9 +246,9 @@ impl ClientSession {
                             break;
                         }
                     }
-                    line_res = lines.next_line() => {
+                    line_res = tokio::time::timeout(Duration::from_secs(PEER_TIMEOUT_SECS), lines.next_line()) => {
                         match line_res {
-                            Ok(Some(line)) => {
+                            Ok(Ok(Some(line))) => {
                                 if let Ok(msg) = serde_json::from_str::<ServerMessage>(&line) {
                                     match msg {
                                         ServerMessage::RoomState { room, participants, screen_presenter } => {
@@ -263,6 +282,7 @@ impl ClientSession {
             participant_id,
             room_name: admitted_room,
             display_name: name.to_string(),
+            server_addr: server_addr.to_string(),
             is_host,
             tcp_tx,
             audio_capture,

@@ -14,6 +14,11 @@ export interface ParticipantInfo {
   is_sharing_screen: boolean;
 }
 
+export interface AudioDevices {
+  inputs: string[];
+  outputs: string[];
+}
+
 export interface RoomJoinedInfo {
   room: string;
   display_name: string;

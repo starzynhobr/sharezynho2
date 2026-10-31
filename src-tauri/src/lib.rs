@@ -45,6 +45,8 @@ pub fn run() {
             get_monitors,
             start_screen_share,
             stop_screen_share,
+            get_audio_devices,
+            set_audio_devices,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

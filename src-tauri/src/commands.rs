@@ -1,14 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::audio;
 use crate::client::{ClientEvent, ClientSession};
 use crate::network::tailscale::{detect_lan_ipv4, detect_tailscale_ipv4};
 use crate::protocol::{DEFAULT_TCP_PORT, DEFAULT_UDP_PORT, ParticipantInfo};
 use crate::screen::ScreenCapture;
 use crate::server::RoomServer;
 use crate::stream_server::DEFAULT_STREAM_PORT;
+
+const RECONNECT_ATTEMPTS: u32 = 5;
+const RECONNECT_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NetworkInfo {
@@ -32,6 +36,12 @@ pub struct RoomStatePayload {
     pub room: String,
     pub participants: Vec<ParticipantInfo>,
     pub screen_presenter: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AudioDevices {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
 }
 
 pub struct AppState {
@@ -256,6 +266,72 @@ pub async fn stop_screen_share(state: State<'_, AppState>) -> Result<(), String>
     }
 }
 
+#[tauri::command]
+pub fn get_audio_devices() -> AudioDevices {
+    AudioDevices {
+        inputs: audio::input_device_names(),
+        outputs: audio::output_device_names(),
+    }
+}
+
+#[tauri::command]
+pub fn set_audio_devices(input: Option<String>, output: Option<String>) {
+    audio::set_preferred_devices(input, output);
+}
+
+/// Handles an unexpected drop: guests retry, hosts have nothing to return to.
+async fn handle_connection_lost(app_handle: AppHandle) {
+    let state = app_handle.state::<AppState>();
+
+    let target = {
+        let mut sess_guard = state.session.lock().await;
+        let Some(sess) = sess_guard.as_mut() else {
+            return;
+        };
+        sess.disconnect();
+        (!sess.is_host).then(|| {
+            (
+                sess.server_addr.clone(),
+                sess.room_name.clone(),
+                sess.display_name.clone(),
+                sess.is_mic_enabled.load(Ordering::Relaxed),
+                sess.is_deafened.load(Ordering::Relaxed),
+            )
+        })
+    };
+
+    if let Some((server_addr, room, name, mic_enabled, deafened)) = target {
+        for attempt in 1..=RECONNECT_ATTEMPTS {
+            let _ = app_handle.emit(
+                "room-error",
+                format!("Conexão perdida. Reconectando ({attempt}/{RECONNECT_ATTEMPTS})..."),
+            );
+            tokio::time::sleep(RECONNECT_DELAY).await;
+
+            let mut sess_guard = state.session.lock().await;
+            if sess_guard.is_none() {
+                return;
+            }
+            let (event_tx, event_rx) = std::sync::mpsc::channel();
+            if let Ok(mut session) =
+                ClientSession::connect(&server_addr, &room, &name, false, event_tx).await
+            {
+                session.set_microphone(mic_enabled);
+                session.set_deafened(deafened);
+                spawn_frame_bridge(&session, state.latest_frame.clone());
+                *sess_guard = Some(session);
+                drop(sess_guard);
+                spawn_event_listener(event_rx, app_handle.clone());
+                let _ = app_handle.emit("reconnected", ());
+                return;
+            }
+        }
+    }
+
+    leave_room_internal(&state).await;
+    let _ = app_handle.emit("disconnected", ());
+}
+
 /// Links the session's incoming frames to the app stream until the session ends.
 fn spawn_frame_bridge(session: &ClientSession, app_latest_frame: Arc<Mutex<Option<Vec<u8>>>>) {
     let session_latest_frame = session.latest_screen_frame.clone();
@@ -295,7 +371,7 @@ fn spawn_event_listener(event_rx: std::sync::mpsc::Receiver<ClientEvent>, app_ha
                     let _ = app_handle.emit("room-error", err);
                 }
                 ClientEvent::Disconnected => {
-                    let _ = app_handle.emit("disconnected", ());
+                    tauri::async_runtime::block_on(handle_connection_lost(app_handle.clone()));
                     break;
                 }
                 _ => {}
