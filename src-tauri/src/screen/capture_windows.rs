@@ -80,10 +80,24 @@ pub fn start(
         .nth(monitor_index)
         .ok_or("Monitor não encontrado")?;
 
+    // Older Windows versions refuse to hide the border, so they keep the default one
+    match spawn_capture(monitor, DrawBorderSettings::WithoutBorder, flags.clone()) {
+        Err(e) if e.contains("Border") => {
+            spawn_capture(monitor, DrawBorderSettings::Default, flags).map_err(Into::into)
+        }
+        result => result.map_err(Into::into),
+    }
+}
+
+fn spawn_capture(
+    monitor: Monitor,
+    border: DrawBorderSettings,
+    flags: Arc<CaptureFlags>,
+) -> Result<(), String> {
     let settings = Settings::new(
         monitor,
         CursorCaptureSettings::Default,
-        DrawBorderSettings::WithoutBorder,
+        border,
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Default,
         DirtyRegionSettings::Default,
@@ -100,7 +114,7 @@ pub fn start(
     });
 
     if let Ok(e) = error_rx.recv_timeout(Duration::from_millis(500)) {
-        return Err(e.into());
+        return Err(e);
     }
     Ok(())
 }
