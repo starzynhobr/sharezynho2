@@ -1,3 +1,8 @@
+export interface VideoQuality {
+  height: number;
+  fps: number;
+}
+
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -47,8 +52,8 @@ export const api = {
     return invoke('get_monitors');
   },
 
-  startScreenShare: async (monitorIndex: number): Promise<void> => {
-    return invoke('start_screen_share', { monitorIndex });
+  startScreenShare: async (monitorIndex: number, quality: VideoQuality): Promise<void> => {
+    return invoke('start_screen_share', { monitorIndex, quality });
   },
 
   stopScreenShare: async (): Promise<void> => {

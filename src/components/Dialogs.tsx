@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { X, Copy, Check, Monitor, ArrowRight, Play } from 'lucide-react';
 import { api } from '../api';
 import { Select } from './Select';
+import type { VideoQuality } from '../api';
 import { buildInvite, parseInvite } from '../invite';
 import type { AudioDevices } from '../types';
 
@@ -266,7 +267,7 @@ interface MonitorPickerModalProps {
   isOpen: boolean;
   monitors: string[];
   onClose: () => void;
-  onSelectMonitor: (index: number) => void;
+  onSelectMonitor: (index: number, quality: VideoQuality) => void;
 }
 
 export const MonitorPickerModal: React.FC<MonitorPickerModalProps> = ({
@@ -276,6 +277,8 @@ export const MonitorPickerModal: React.FC<MonitorPickerModalProps> = ({
   onSelectMonitor,
 }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [resolution, setResolution] = useState('');
+  const [frameRate, setFrameRate] = useState('');
 
   if (!isOpen) return null;
 
@@ -316,6 +319,23 @@ export const MonitorPickerModal: React.FC<MonitorPickerModalProps> = ({
           ))}
         </div>
 
+        <div className="grid grid-cols-2 gap-3">
+          <Select
+            label="Resolução"
+            value={resolution}
+            defaultLabel="1080p"
+            options={['720p', '480p']}
+            onChange={setResolution}
+          />
+          <Select
+            label="Taxa de quadros"
+            value={frameRate}
+            defaultLabel="30 FPS"
+            options={['60 FPS', '15 FPS']}
+            onChange={setFrameRate}
+          />
+        </div>
+
         <div className="flex items-center justify-end gap-2 pt-2 border-t border-border-subtle/60">
           <button
             onClick={onClose}
@@ -324,7 +344,12 @@ export const MonitorPickerModal: React.FC<MonitorPickerModalProps> = ({
             Cancelar
           </button>
           <button
-            onClick={() => onSelectMonitor(selectedIndex)}
+            onClick={() =>
+              onSelectMonitor(selectedIndex, {
+                height: parseInt(resolution || '1080p', 10),
+                fps: parseInt(frameRate || '30 FPS', 10),
+              })
+            }
             className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-root text-xs font-bold transition-all cursor-pointer"
           >
             Iniciar Transmissão

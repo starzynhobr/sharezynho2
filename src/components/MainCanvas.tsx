@@ -12,6 +12,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { useRoomStore } from '../store/roomStore';
+import { ScreenView } from './ScreenView';
 
 const dockButton =
   'h-11 min-w-11 px-3 rounded-xl flex items-center justify-center gap-2 text-xs font-semibold transition-colors cursor-pointer';
@@ -116,19 +117,13 @@ const CallView: React.FC = () => {
         </button>
       </header>
 
-      <section className="relative flex-1 min-h-0 rounded-2xl bg-black/40 border border-border-subtle overflow-hidden flex items-center justify-center">
-        {screenPresenter ? (
-          <>
-            <img
-              src={`http://127.0.0.1:${networkInfo?.stream_port || 9768}/video`}
-              alt={`Tela de ${presenterName || 'um participante'}`}
-              className="w-full h-full object-contain"
-            />
-            <span className="absolute top-3 left-3 rounded-lg bg-root/85 px-2.5 py-1.5 text-xs font-semibold text-white">
-              Tela de {presenterName || 'um participante'}
-            </span>
-          </>
-        ) : (
+      {screenPresenter ? (
+        <ScreenView
+          src={`http://127.0.0.1:${networkInfo?.stream_port || 9768}/video`}
+          label={`Tela de ${presenterName || 'um participante'}`}
+        />
+      ) : (
+        <section className="relative flex-1 min-h-0 rounded-2xl bg-black/40 border border-border-subtle overflow-hidden flex items-center justify-center">
           <div className="text-center px-6">
             <p className="font-display text-2xl font-bold text-white">Ninguém compartilhando</p>
             <p className="mt-2 text-sm text-slate-400">A tela de quem transmitir aparece aqui.</p>
@@ -140,8 +135,8 @@ const CallView: React.FC = () => {
               Compartilhar minha tela
             </button>
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
       <div className="flex items-center justify-center gap-2 pb-1">
         <button

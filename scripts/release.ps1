@@ -21,6 +21,18 @@ Set-FileVersion "$root\package.json" '"version": "[^"]+"' "`"version`": `"$Versi
 Set-FileVersion "$root\src-tauri\tauri.conf.json" '"version": "[^"]+"' "`"version`": `"$Version`""
 Set-FileVersion "$root\src-tauri\Cargo.toml" '(?m)^version = "[^"]+"' "version = `"$Version`""
 
+# FFmpeg ships beside the app and is too large to keep in git
+$binaries = "$root\src-tauri\binaries"
+$sidecar = "$binaries\ffmpeg-x86_64-pc-windows-msvc.exe"
+if (-not (Test-Path $sidecar)) {
+    $zip = Join-Path $env:TEMP "ffmpeg-lgpl.zip"
+    $extract = Join-Path $env:TEMP "ffmpeg-lgpl"
+    Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip" -OutFile $zip
+    Expand-Archive $zip $extract -Force
+    New-Item -ItemType Directory -Force $binaries | Out-Null
+    Copy-Item (Get-ChildItem $extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName $sidecar
+}
+
 $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content $KeyPath -Raw
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (Get-Content "$KeyPath.password" -Raw).Trim()
 npm run tauri build

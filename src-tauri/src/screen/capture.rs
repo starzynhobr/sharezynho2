@@ -1,8 +1,11 @@
 use crate::protocol::TAG_VIDEO;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
+
+use super::encoder::{H264Encoder, VideoQuality};
 
 #[cfg(target_os = "macos")]
 use super::capture_macos as backend;
@@ -10,15 +13,6 @@ use super::capture_macos as backend;
 use super::capture_windows as backend;
 
 const CHUNK_SIZE: usize = 1200;
-const TARGET_FPS: u64 = 30;
-const MAX_WIDTH: usize = 1920;
-const MAX_BYTES_PER_SEC: u64 = 4_000_000;
-const MAX_FRAME_BYTES: usize = 150 * 1024;
-const MIN_FRAME_BYTES: usize = 90 * 1024;
-const MIN_QUALITY: u8 = 35;
-const MAX_QUALITY: u8 = 65;
-// The sender's own preview reuses every Nth encoded frame, about 5 FPS at most
-const PREVIEW_FRAME_INTERVAL: u32 = 6;
 
 pub struct ScreenCapture {
     pub is_sharing: Arc<AtomicBool>,
@@ -30,10 +24,11 @@ pub(super) struct CaptureFlags {
     stop_flag: Arc<AtomicBool>,
     packet_tx: mpsc::Sender<Vec<u8>>,
     stream_id: u32,
-    frame_counter: std::sync::atomic::AtomicU32,
-    next_frame_time: std::sync::Mutex<Instant>,
-    quality: std::sync::atomic::AtomicU8,
-    preview_frame: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    frame_counter: Arc<AtomicU32>,
+    next_frame_time: Mutex<Instant>,
+    quality: VideoQuality,
+    encoder: Mutex<Option<H264Encoder>>,
+    preview_tx: broadcast::Sender<Vec<u8>>,
 }
 
 impl CaptureFlags {
@@ -41,70 +36,68 @@ impl CaptureFlags {
         self.stop_flag.load(Ordering::Relaxed)
     }
 
-    /// True when sharing is on and the FPS and bandwidth budget allow a frame.
+    /// True when sharing is on and the selected frame rate allows a frame.
     pub(super) fn ready_for_frame(&self) -> bool {
         self.is_sharing.load(Ordering::Relaxed)
             && Instant::now() >= *self.next_frame_time.lock().unwrap()
     }
 
-    /// Encodes one tightly packed RGBA frame and queues its packets.
+    /// Queues one tightly packed RGBA frame for the H.264 encoder.
     pub(super) fn send_rgba(&self, raw_pixels: &[u8], width: usize, height: usize) {
-        let frame_start = Instant::now();
-
-        // Encode to JPEG
-        let mut jpeg_bytes = Vec::with_capacity(64 * 1024);
-        let factor = width.div_ceil(MAX_WIDTH).max(1);
-        let scaled = (factor > 1).then(|| downscale_rgba(raw_pixels, width, height, factor));
-        let (pixels, out_width, out_height) = match &scaled {
-            Some(pixels) => (pixels.as_slice(), width / factor, height / factor),
-            None => (raw_pixels, width, height),
-        };
-        let quality = self.quality.load(Ordering::Relaxed);
-        let encoder = jpeg_encoder::Encoder::new(&mut jpeg_bytes, quality);
-        if encoder
-            .encode(
-                pixels,
-                out_width as u16,
-                out_height as u16,
-                jpeg_encoder::ColorType::Rgba,
-            )
-            .is_err()
-        {
-            return;
-        }
-
-        if jpeg_bytes.len() > MAX_FRAME_BYTES {
-            self.quality.store(
-                quality.saturating_sub(5).max(MIN_QUALITY),
-                Ordering::Relaxed,
-            );
-        } else if jpeg_bytes.len() < MIN_FRAME_BYTES {
-            self.quality
-                .store((quality + 5).min(MAX_QUALITY), Ordering::Relaxed);
-        }
-
-        let budget = Duration::from_millis(jpeg_bytes.len() as u64 * 1000 / MAX_BYTES_PER_SEC);
         *self.next_frame_time.lock().unwrap() =
-            frame_start + budget.max(Duration::from_millis(1000 / TARGET_FPS));
+            Instant::now() + Duration::from_millis(1000 / self.quality.fps as u64);
 
-        let frame_id = self.frame_counter.fetch_add(1, Ordering::Relaxed);
+        // Halving large captures first keeps the pipe to the encoder affordable
+        let factor = (height / self.quality.height as usize).max(1);
+        let scaled = (factor > 1).then(|| downscale_rgba(raw_pixels, width, height, factor));
+        let (pixels, out_width, out_height) = match scaled {
+            Some(pixels) => (pixels, width / factor, height / factor),
+            None => (raw_pixels.to_vec(), width, height),
+        };
 
-        let total_chunks = jpeg_bytes.len().div_ceil(CHUNK_SIZE) as u16;
-
-        for (chunk_idx, chunk) in jpeg_bytes.chunks(CHUNK_SIZE).enumerate() {
-            let mut packet = Vec::with_capacity(13 + chunk.len());
-            packet.push(TAG_VIDEO);
-            packet.extend_from_slice(&self.stream_id.to_be_bytes());
-            packet.extend_from_slice(&frame_id.to_be_bytes());
-            packet.extend_from_slice(&(chunk_idx as u16).to_be_bytes());
-            packet.extend_from_slice(&total_chunks.to_be_bytes());
-            packet.extend_from_slice(chunk);
-
-            let _ = self.packet_tx.try_send(packet);
+        let mut encoder = self.encoder.lock().unwrap();
+        if !encoder
+            .as_ref()
+            .is_some_and(|e| e.matches(out_width, out_height))
+        {
+            *encoder = H264Encoder::start(
+                out_width,
+                out_height,
+                self.quality,
+                self.stop_flag.clone(),
+                self.frame_sink(),
+            )
+            .map_err(|e| eprintln!("Falha ao iniciar o encoder: {}", e))
+            .ok();
         }
+        if let Some(encoder) = encoder.as_ref() {
+            encoder.push_frame(pixels);
+        }
+    }
 
-        if frame_id % PREVIEW_FRAME_INTERVAL == 1 {
-            *self.preview_frame.lock().unwrap() = Some(jpeg_bytes);
+    /// Splits encoded frames into packets and mirrors them to the local preview.
+    fn frame_sink(&self) -> impl FnMut(Vec<u8>) + Send + 'static {
+        let packet_tx = self.packet_tx.clone();
+        let preview_tx = self.preview_tx.clone();
+        let stream_id = self.stream_id;
+        let frame_counter = self.frame_counter.clone();
+        move |frame: Vec<u8>| {
+            let frame_id = frame_counter.fetch_add(1, Ordering::Relaxed);
+            let total_chunks = frame.len().div_ceil(CHUNK_SIZE) as u16;
+
+            for (chunk_idx, chunk) in frame.chunks(CHUNK_SIZE).enumerate() {
+                let mut packet = Vec::with_capacity(13 + chunk.len());
+                packet.push(TAG_VIDEO);
+                packet.extend_from_slice(&stream_id.to_be_bytes());
+                packet.extend_from_slice(&frame_id.to_be_bytes());
+                packet.extend_from_slice(&(chunk_idx as u16).to_be_bytes());
+                packet.extend_from_slice(&total_chunks.to_be_bytes());
+                packet.extend_from_slice(chunk);
+
+                let _ = packet_tx.try_send(packet);
+            }
+
+            let _ = preview_tx.send(frame);
         }
     }
 }
@@ -140,8 +133,9 @@ impl ScreenCapture {
 
     pub fn start(
         monitor_index: usize,
+        quality: VideoQuality,
         packet_tx: mpsc::Sender<Vec<u8>>,
-        preview_frame: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+        preview_tx: broadcast::Sender<Vec<u8>>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let is_sharing = Arc::new(AtomicBool::new(true));
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -151,10 +145,11 @@ impl ScreenCapture {
             stop_flag: stop_flag.clone(),
             packet_tx,
             stream_id: fastrand::u32(1..),
-            frame_counter: std::sync::atomic::AtomicU32::new(1),
-            next_frame_time: std::sync::Mutex::new(Instant::now()),
-            quality: std::sync::atomic::AtomicU8::new(MAX_QUALITY),
-            preview_frame,
+            frame_counter: Arc::new(AtomicU32::new(1)),
+            next_frame_time: Mutex::new(Instant::now()),
+            quality,
+            encoder: Mutex::new(None),
+            preview_tx,
         });
 
         backend::start(monitor_index, flags)?;

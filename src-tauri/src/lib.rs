@@ -13,7 +13,7 @@ use stream_server::{DEFAULT_STREAM_PORT, start_stream_server};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState::new();
-    let latest_frame = app_state.latest_frame.clone();
+    let video_frame_tx = app_state.video_frame_tx.clone();
 
     let builder = tauri::Builder::default();
 
@@ -35,7 +35,7 @@ pub fn run() {
         .setup(move |app| {
             // Start background video MJPEG streaming server for webview
             tauri::async_runtime::spawn(async move {
-                start_stream_server(DEFAULT_STREAM_PORT, latest_frame).await;
+                start_stream_server(DEFAULT_STREAM_PORT, video_frame_tx).await;
             });
 
             use tauri::Manager;

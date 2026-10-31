@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tokio::sync::broadcast;
 
 struct FrameAssembly {
     total_chunks: u16,
@@ -13,16 +13,20 @@ pub struct ScreenReceiver {
     assemblies: HashMap<u32, FrameAssembly>,
     stream_id: u32,
     latest_frame_id: u32,
-    latest_frame: Arc<Mutex<Option<Vec<u8>>>>,
+    last_decodable_id: u32,
+    waiting_for_keyframe: bool,
+    frame_tx: broadcast::Sender<Vec<u8>>,
 }
 
 impl ScreenReceiver {
-    pub fn new(latest_frame: Arc<Mutex<Option<Vec<u8>>>>) -> Self {
+    pub fn new(frame_tx: broadcast::Sender<Vec<u8>>) -> Self {
         Self {
             assemblies: HashMap::new(),
             stream_id: 0,
             latest_frame_id: 0,
-            latest_frame,
+            last_decodable_id: 0,
+            waiting_for_keyframe: true,
+            frame_tx,
         }
     }
 
@@ -41,6 +45,8 @@ impl ScreenReceiver {
         if stream_id != self.stream_id {
             self.stream_id = stream_id;
             self.latest_frame_id = 0;
+            self.last_decodable_id = 0;
+            self.waiting_for_keyframe = true;
             self.assemblies.clear();
         }
 
@@ -74,19 +80,41 @@ impl ScreenReceiver {
             assembly.chunks_received += 1;
         }
 
-        // When all chunks are received, store complete JPEG bytes
+        // When all chunks are received, release the encoded frame
         if assembly.chunks_received == assembly.total_chunks {
-            let mut jpeg_bytes = Vec::new();
+            let mut frame_bytes = Vec::new();
             for bytes in assembly.chunks.iter().flatten() {
-                jpeg_bytes.extend_from_slice(bytes);
+                frame_bytes.extend_from_slice(bytes);
             }
 
             self.assemblies.remove(&frame_id);
 
-            let mut guard = self.latest_frame.lock().unwrap();
-            *guard = Some(jpeg_bytes);
+            self.release_frame(frame_id, frame_bytes);
         }
     }
+
+    /// A lost frame breaks every later one, so playback resumes at the next keyframe.
+    fn release_frame(&mut self, frame_id: u32, frame: Vec<u8>) {
+        if frame_id <= self.last_decodable_id {
+            return;
+        }
+        if frame_id != self.last_decodable_id + 1 {
+            self.waiting_for_keyframe = true;
+        }
+        if self.waiting_for_keyframe && !is_keyframe(&frame) {
+            return;
+        }
+        self.waiting_for_keyframe = false;
+        self.last_decodable_id = frame_id;
+        let _ = self.frame_tx.send(frame);
+    }
+}
+
+/// True when the H.264 access unit holds an IDR slice.
+pub fn is_keyframe(frame: &[u8]) -> bool {
+    frame
+        .windows(4)
+        .any(|w| w[0] == 0 && w[1] == 0 && w[2] == 1 && w[3] & 0x1F == 5)
 }
 
 #[cfg(test)]
@@ -94,24 +122,39 @@ mod tests {
     use super::*;
     use crate::protocol::TAG_VIDEO;
 
-    fn packet(stream_id: u32, frame_id: u32, payload: u8) -> Vec<u8> {
+    fn packet(stream_id: u32, frame_id: u32, nal_type: u8) -> Vec<u8> {
         let mut data = vec![TAG_VIDEO];
         data.extend_from_slice(&stream_id.to_be_bytes());
         data.extend_from_slice(&frame_id.to_be_bytes());
         data.extend_from_slice(&0u16.to_be_bytes());
         data.extend_from_slice(&1u16.to_be_bytes());
-        data.push(payload);
+        data.extend_from_slice(&[0, 0, 1, nal_type]);
         data
     }
 
     #[test]
     fn new_stream_is_accepted_after_frame_counter_restarts() {
-        let latest = Arc::new(Mutex::new(None));
-        let mut receiver = ScreenReceiver::new(latest.clone());
+        let (tx, mut rx) = broadcast::channel(8);
+        let mut receiver = ScreenReceiver::new(tx);
 
-        receiver.handle_packet(&packet(1, 9000, 1));
-        receiver.handle_packet(&packet(2, 1, 2));
+        receiver.handle_packet(&packet(1, 9000, 0x65));
+        receiver.handle_packet(&packet(2, 1, 0x65));
 
-        assert_eq!(*latest.lock().unwrap(), Some(vec![2]));
+        assert_eq!(rx.try_recv().unwrap(), vec![0, 0, 1, 0x65]);
+        assert_eq!(rx.try_recv().unwrap(), vec![0, 0, 1, 0x65]);
+    }
+
+    #[test]
+    fn lost_frame_waits_for_next_keyframe() {
+        let (tx, mut rx) = broadcast::channel(8);
+        let mut receiver = ScreenReceiver::new(tx);
+
+        receiver.handle_packet(&packet(1, 1, 0x65));
+        receiver.handle_packet(&packet(1, 3, 0x41));
+        receiver.handle_packet(&packet(1, 4, 0x65));
+
+        assert_eq!(rx.try_recv().unwrap(), vec![0, 0, 1, 0x65]);
+        assert_eq!(rx.try_recv().unwrap(), vec![0, 0, 1, 0x65]);
+        assert!(rx.try_recv().is_err());
     }
 }

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::audio::processing::VoiceProcessor;
 use crate::audio::{AudioCapture, AudioPlayback};
@@ -12,7 +12,7 @@ use crate::protocol::{
     ClientMessage, PEER_TIMEOUT_SECS, PING_INTERVAL_SECS, ParticipantInfo, ServerMessage,
     TAG_AUDIO, TAG_VIDEO, serialize_client_msg,
 };
-use crate::screen::{ScreenCapture, ScreenReceiver};
+use crate::screen::{ScreenCapture, ScreenReceiver, VideoQuality};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -42,7 +42,7 @@ pub struct ClientSession {
     pub is_mic_enabled: Arc<AtomicBool>,
     pub is_deafened: Arc<AtomicBool>,
     pub is_sharing_screen: Arc<AtomicBool>,
-    pub latest_screen_frame: Arc<Mutex<Option<Vec<u8>>>>,
+    pub video_frame_tx: broadcast::Sender<Vec<u8>>,
     shutdown_tx: watch::Sender<bool>,
 }
 
@@ -119,10 +119,9 @@ impl ClientSession {
             }
         };
 
-        // Shared latest video frame
-        let latest_screen_frame = Arc::new(Mutex::new(None));
-        let screen_receiver =
-            Arc::new(Mutex::new(ScreenReceiver::new(latest_screen_frame.clone())));
+        // Encoded video frames, from the room or from our own preview
+        let (video_frame_tx, _) = broadcast::channel(120);
+        let screen_receiver = Arc::new(Mutex::new(ScreenReceiver::new(video_frame_tx.clone())));
 
         // UDP Receiver task
         let udp_rx_socket = udp_socket.clone();
@@ -241,7 +240,6 @@ impl ClientSession {
         // TCP Reader task
         let evt_tx = event_tx.clone();
         let mut tcp_shutdown_rx = shutdown_rx.clone();
-        let presenter_frame = latest_screen_frame.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -256,9 +254,6 @@ impl ClientSession {
                                 if let Ok(msg) = serde_json::from_str::<ServerMessage>(&line) {
                                     match msg {
                                         ServerMessage::RoomState { room, participants, screen_presenter } => {
-                                            if screen_presenter.is_none() {
-                                                *presenter_frame.lock().unwrap() = None;
-                                            }
                                             let _ = evt_tx.send(ClientEvent::RoomStateUpdated {
                                                 room,
                                                 participants,
@@ -296,7 +291,7 @@ impl ClientSession {
             is_mic_enabled,
             is_deafened: Arc::new(AtomicBool::new(false)),
             is_sharing_screen: Arc::new(AtomicBool::new(false)),
-            latest_screen_frame,
+            video_frame_tx,
             shutdown_tx,
         })
     }
@@ -319,11 +314,16 @@ impl ClientSession {
         }
     }
 
-    pub fn start_screen_share(&mut self, monitor_idx: usize) -> Result<(), String> {
+    pub fn start_screen_share(
+        &mut self,
+        monitor_idx: usize,
+        quality: VideoQuality,
+    ) -> Result<(), String> {
         let cap = ScreenCapture::start(
             monitor_idx,
+            quality,
             self.screen_packet_tx.clone(),
-            self.latest_screen_frame.clone(),
+            self.video_frame_tx.clone(),
         )
         .map_err(|e| format!("Falha ao iniciar compartilhamento: {}", e))?;
         self.screen_capture = Some(cap);

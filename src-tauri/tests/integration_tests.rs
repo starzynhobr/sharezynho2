@@ -8,6 +8,8 @@ use sharezynho::protocol::{
     ClientMessage, ParticipantInfo, ServerMessage, TAG_AUDIO, serialize_client_msg,
     serialize_server_msg,
 };
+use sharezynho::screen::VideoQuality;
+use sharezynho::screen::receiver::is_keyframe;
 use sharezynho::server::RoomServer;
 
 #[test]
@@ -264,22 +266,20 @@ async fn test_real_screen_capture_reaches_viewer_and_can_restart() {
         .unwrap();
 
     for attempt in 0..2 {
-        *viewer.latest_screen_frame.lock().unwrap() = None;
-        tokio::task::block_in_place(|| host.start_screen_share(0)).unwrap();
+        let mut frames = viewer.video_frame_tx.subscribe();
+        let quality = VideoQuality {
+            height: 720,
+            fps: 30,
+        };
+        tokio::task::block_in_place(|| host.start_screen_share(0, quality)).unwrap();
 
-        let mut frame = None;
-        for _ in 0..50 {
-            sleep(Duration::from_millis(100)).await;
-            frame = viewer.latest_screen_frame.lock().unwrap().clone();
-            if frame.is_some() {
-                break;
-            }
-        }
+        let frame = tokio::time::timeout(Duration::from_secs(10), frames.recv()).await;
         host.stop_screen_share();
 
-        let frame = frame.unwrap_or_else(|| panic!("no frame on attempt {attempt}"));
-        assert_eq!(&frame[..2], &[0xFF, 0xD8], "frame must be a JPEG");
-        image::load_from_memory(&frame).expect("frame must decode");
+        let frame = frame
+            .unwrap_or_else(|_| panic!("no frame on attempt {attempt}"))
+            .unwrap();
+        assert!(is_keyframe(&frame), "stream must start on a keyframe");
         sleep(Duration::from_millis(300)).await;
     }
 

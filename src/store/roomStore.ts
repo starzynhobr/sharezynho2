@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../api';
+import type { VideoQuality } from '../api';
 import type { NetworkInfo, ParticipantInfo } from '../types';
 
 export interface RoomStoreState {
@@ -44,7 +45,7 @@ export interface RoomStoreState {
   toggleMic: () => Promise<void>;
   toggleDeafen: () => Promise<void>;
   startShareClick: () => Promise<void>;
-  selectMonitor: (index: number) => Promise<void>;
+  selectMonitor: (index: number, quality: VideoQuality) => Promise<void>;
   stopShareClick: () => Promise<void>;
 }
 
@@ -288,8 +289,6 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
       const list = await api.getMonitors();
       if (list.length === 0) {
         set({ statusText: 'Nenhum monitor compatível encontrado' });
-      } else if (list.length === 1) {
-        await get().selectMonitor(0);
       } else {
         set({
           monitors: list,
@@ -301,10 +300,10 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
     }
   },
 
-  selectMonitor: async (index: number) => {
+  selectMonitor: async (index, quality) => {
     set({ isMonitorPickerOpen: false });
     try {
-      await api.startScreenShare(index);
+      await api.startScreenShare(index, quality);
       set({
         isSharingScreen: true,
         statusText: 'Compartilhamento de tela ativo',

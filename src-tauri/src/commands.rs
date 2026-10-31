@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio;
 use crate::client::{ClientEvent, ClientSession};
 use crate::network::tailscale::{detect_lan_ipv4, detect_tailscale_ipv4};
 use crate::protocol::{DEFAULT_TCP_PORT, DEFAULT_UDP_PORT, ParticipantInfo};
-use crate::screen::ScreenCapture;
+use crate::screen::{ScreenCapture, VideoQuality};
 use crate::server::RoomServer;
 use crate::stream_server::DEFAULT_STREAM_PORT;
 
@@ -47,7 +47,7 @@ pub struct AudioDevices {
 pub struct AppState {
     pub session: Arc<tokio::sync::Mutex<Option<ClientSession>>>,
     pub server_shutdown: Arc<tokio::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
-    pub latest_frame: Arc<Mutex<Option<Vec<u8>>>>,
+    pub video_frame_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
 }
 
 impl Default for AppState {
@@ -61,7 +61,7 @@ impl AppState {
         Self {
             session: Arc::new(tokio::sync::Mutex::new(None)),
             server_shutdown: Arc::new(tokio::sync::Mutex::new(None)),
-            latest_frame: Arc::new(Mutex::new(None)),
+            video_frame_tx: tokio::sync::broadcast::channel(120).0,
         }
     }
 }
@@ -114,7 +114,7 @@ pub async fn create_room(
         .await
         .map_err(|e| format!("Falha ao conectar na sala local: {}", e))?;
 
-    spawn_frame_bridge(&session, state.latest_frame.clone());
+    spawn_frame_bridge(&session, state.video_frame_tx.clone());
 
     let display_name = session.display_name.clone();
     let admitted_room = session.room_name.clone();
@@ -158,7 +158,7 @@ pub async fn join_room(
         .await
         .map_err(|e| format!("Falha ao conectar no host {}: {}", server_addr, e))?;
 
-    spawn_frame_bridge(&session, state.latest_frame.clone());
+    spawn_frame_bridge(&session, state.video_frame_tx.clone());
 
     let display_name = session.display_name.clone();
     let admitted_room = session.room_name.clone();
@@ -199,10 +199,6 @@ async fn leave_room_internal(state: &AppState) {
             let _ = tx.send(true);
         }
     }
-    {
-        let mut frame_guard = state.latest_frame.lock().unwrap();
-        *frame_guard = None;
-    }
 }
 
 #[tauri::command]
@@ -239,11 +235,12 @@ pub fn get_monitors() -> Vec<String> {
 #[tauri::command]
 pub async fn start_screen_share(
     monitor_index: usize,
+    quality: VideoQuality,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let mut sess_guard = state.session.lock().await;
     if let Some(sess) = sess_guard.as_mut() {
-        sess.start_screen_share(monitor_index)
+        sess.start_screen_share(monitor_index, quality)
     } else {
         Err("Nenhuma sessão ativa".to_string())
     }
@@ -312,7 +309,7 @@ async fn handle_connection_lost(app_handle: AppHandle) {
             {
                 session.set_microphone(mic_enabled);
                 session.set_deafened(deafened);
-                spawn_frame_bridge(&session, state.latest_frame.clone());
+                spawn_frame_bridge(&session, state.video_frame_tx.clone());
                 *sess_guard = Some(session);
                 drop(sess_guard);
                 spawn_event_listener(event_rx, app_handle.clone());
@@ -326,20 +323,25 @@ async fn handle_connection_lost(app_handle: AppHandle) {
     let _ = app_handle.emit("disconnected", ());
 }
 
-/// Links the session's incoming frames to the app stream until the session ends.
-fn spawn_frame_bridge(session: &ClientSession, app_latest_frame: Arc<Mutex<Option<Vec<u8>>>>) {
-    let session_latest_frame = session.latest_screen_frame.clone();
+/// Forwards the session's video frames to the app stream until the session ends.
+fn spawn_frame_bridge(
+    session: &ClientSession,
+    app_frame_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+) {
+    let mut frame_rx = session.video_frame_tx.subscribe();
     let mut shutdown_rx = session.subscribe_shutdown();
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(30));
         loop {
             tokio::select! {
                 _ = shutdown_rx.changed() => break,
-                _ = interval.tick() => {
-                    let frame = session_latest_frame.lock().unwrap().clone();
-                    *app_latest_frame.lock().unwrap() = frame;
-                }
+                frame = frame_rx.recv() => match frame {
+                    Ok(frame) => {
+                        let _ = app_frame_tx.send(frame);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
             }
         }
     });
