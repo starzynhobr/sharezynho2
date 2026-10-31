@@ -11,6 +11,7 @@ struct FrameAssembly {
 
 pub struct ScreenReceiver {
     assemblies: HashMap<u32, FrameAssembly>,
+    stream_id: u32,
     latest_frame_id: u32,
     latest_frame: Arc<Mutex<Option<Vec<u8>>>>,
 }
@@ -19,20 +20,29 @@ impl ScreenReceiver {
     pub fn new(latest_frame: Arc<Mutex<Option<Vec<u8>>>>) -> Self {
         Self {
             assemblies: HashMap::new(),
+            stream_id: 0,
             latest_frame_id: 0,
             latest_frame,
         }
     }
 
     pub fn handle_packet(&mut self, data: &[u8]) {
-        if data.len() < 9 {
+        if data.len() < 13 {
             return;
         }
 
-        let frame_id = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-        let chunk_index = u16::from_be_bytes([data[5], data[6]]);
-        let total_chunks = u16::from_be_bytes([data[7], data[8]]);
-        let chunk_data = &data[9..];
+        let stream_id = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+        let frame_id = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
+        let chunk_index = u16::from_be_bytes([data[9], data[10]]);
+        let total_chunks = u16::from_be_bytes([data[11], data[12]]);
+        let chunk_data = &data[13..];
+
+        // Each capture restarts its frame counter, so a new stream resets tracking
+        if stream_id != self.stream_id {
+            self.stream_id = stream_id;
+            self.latest_frame_id = 0;
+            self.assemblies.clear();
+        }
 
         // If this frame is much older than our current known frame, discard
         if frame_id + 5 < self.latest_frame_id {
@@ -76,5 +86,32 @@ impl ScreenReceiver {
             let mut guard = self.latest_frame.lock().unwrap();
             *guard = Some(jpeg_bytes);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::TAG_VIDEO;
+
+    fn packet(stream_id: u32, frame_id: u32, payload: u8) -> Vec<u8> {
+        let mut data = vec![TAG_VIDEO];
+        data.extend_from_slice(&stream_id.to_be_bytes());
+        data.extend_from_slice(&frame_id.to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.push(payload);
+        data
+    }
+
+    #[test]
+    fn new_stream_is_accepted_after_frame_counter_restarts() {
+        let latest = Arc::new(Mutex::new(None));
+        let mut receiver = ScreenReceiver::new(latest.clone());
+
+        receiver.handle_packet(&packet(1, 9000, 1));
+        receiver.handle_packet(&packet(2, 1, 2));
+
+        assert_eq!(*latest.lock().unwrap(), Some(vec![2]));
     }
 }

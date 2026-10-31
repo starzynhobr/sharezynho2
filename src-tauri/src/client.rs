@@ -102,7 +102,16 @@ impl ClientSession {
         });
 
         // Initialize Audio Playback
-        let audio_playback = AudioPlayback::start().ok();
+        let audio_playback = match AudioPlayback::start() {
+            Ok(playback) => Some(playback),
+            Err(e) => {
+                let _ = event_tx.send(ClientEvent::Error(format!(
+                    "Áudio de saída indisponível: {}",
+                    e
+                )));
+                None
+            }
+        };
 
         // Shared latest video frame
         let latest_screen_frame = Arc::new(Mutex::new(None));
@@ -130,8 +139,11 @@ impl ClientSession {
                         {
                             let tag = buf[0];
                             if tag == TAG_AUDIO {
-                                if let Some(pusher) = &rx_audio_buf {
-                                    pusher(&buf[1..len]);
+                                if let Some(pusher) = &rx_audio_buf
+                                    && len >= 5
+                                {
+                                    let sender_id = u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]);
+                                    pusher(sender_id, &buf[5..len]);
                                 }
                             } else if tag == TAG_VIDEO {
                                 let mut rec = rx_screen_rec.lock().unwrap();
@@ -151,6 +163,7 @@ impl ClientSession {
         // UDP Sender task
         let udp_tx_socket = udp_socket.clone();
         let mut send_shutdown_rx = shutdown_rx.clone();
+        let audio_sender_id = fastrand::u32(..);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -160,8 +173,9 @@ impl ClientSession {
                         }
                     }
                     Some(audio_data) = audio_packet_rx.recv() => {
-                        let mut packet = Vec::with_capacity(1 + audio_data.len());
+                        let mut packet = Vec::with_capacity(5 + audio_data.len());
                         packet.push(TAG_AUDIO);
+                        packet.extend_from_slice(&audio_sender_id.to_be_bytes());
                         packet.extend_from_slice(&audio_data);
                         let _ = udp_tx_socket.send_to(&packet, relay_udp_addr).await;
                     }
@@ -192,12 +206,19 @@ impl ClientSession {
         });
 
         // Start Audio Capture
-        let audio_capture = AudioCapture::start(audio_packet_tx, speaking_status_tx).ok();
+        let audio_capture = match AudioCapture::start(audio_packet_tx, speaking_status_tx) {
+            Ok(capture) => Some(capture),
+            Err(e) => {
+                let _ = event_tx.send(ClientEvent::Error(format!("Microfone indisponível: {}", e)));
+                None
+            }
+        };
         let is_mic_enabled = Arc::new(AtomicBool::new(true));
 
         // TCP Reader task
         let evt_tx = event_tx.clone();
         let mut tcp_shutdown_rx = shutdown_rx.clone();
+        let presenter_frame = latest_screen_frame.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -212,6 +233,9 @@ impl ClientSession {
                                 if let Ok(msg) = serde_json::from_str::<ServerMessage>(&line) {
                                     match msg {
                                         ServerMessage::RoomState { room, participants, screen_presenter } => {
+                                            if screen_presenter.is_none() {
+                                                *presenter_frame.lock().unwrap() = None;
+                                            }
                                             let _ = evt_tx.send(ClientEvent::RoomStateUpdated {
                                                 room,
                                                 participants,
@@ -251,6 +275,10 @@ impl ClientSession {
             latest_screen_frame,
             shutdown_tx,
         })
+    }
+
+    pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
+        self.shutdown_tx.subscribe()
     }
 
     pub fn set_microphone(&mut self, enabled: bool) {

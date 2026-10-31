@@ -110,25 +110,7 @@ pub async fn create_room(
         .await
         .map_err(|e| format!("Falha ao conectar na sala local: {}", e))?;
 
-    // Share frame pointer with session
-    let session_latest_frame = session.latest_screen_frame.clone();
-    let app_latest_frame = state.latest_frame.clone();
-
-    // Link incoming frames to app stream
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(30));
-        loop {
-            interval.tick().await;
-            let frame = {
-                let guard = session_latest_frame.lock().unwrap();
-                guard.clone()
-            };
-            if let Some(f) = frame {
-                let mut guard = app_latest_frame.lock().unwrap();
-                *guard = Some(f);
-            }
-        }
-    });
+    spawn_frame_bridge(&session, state.latest_frame.clone());
 
     let display_name = session.display_name.clone();
     let admitted_room = session.room_name.clone();
@@ -172,23 +154,7 @@ pub async fn join_room(
         .await
         .map_err(|e| format!("Falha ao conectar no host {}: {}", server_addr, e))?;
 
-    let session_latest_frame = session.latest_screen_frame.clone();
-    let app_latest_frame = state.latest_frame.clone();
-
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(30));
-        loop {
-            interval.tick().await;
-            let frame = {
-                let guard = session_latest_frame.lock().unwrap();
-                guard.clone()
-            };
-            if let Some(f) = frame {
-                let mut guard = app_latest_frame.lock().unwrap();
-                *guard = Some(f);
-            }
-        }
-    });
+    spawn_frame_bridge(&session, state.latest_frame.clone());
 
     let display_name = session.display_name.clone();
     let admitted_room = session.room_name.clone();
@@ -288,6 +254,25 @@ pub async fn stop_screen_share(state: State<'_, AppState>) -> Result<(), String>
     } else {
         Err("Nenhuma sessão ativa".to_string())
     }
+}
+
+/// Links the session's incoming frames to the app stream until the session ends.
+fn spawn_frame_bridge(session: &ClientSession, app_latest_frame: Arc<Mutex<Option<Vec<u8>>>>) {
+    let session_latest_frame = session.latest_screen_frame.clone();
+    let mut shutdown_rx = session.subscribe_shutdown();
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(30));
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => break,
+                _ = interval.tick() => {
+                    let frame = session_latest_frame.lock().unwrap().clone();
+                    *app_latest_frame.lock().unwrap() = frame;
+                }
+            }
+        }
+    });
 }
 
 fn spawn_event_listener(event_rx: std::sync::mpsc::Receiver<ClientEvent>, app_handle: AppHandle) {

@@ -85,8 +85,9 @@ impl RoomServer {
                     accept_res = tcp_listener.accept() => {
                         if let Ok((socket, peer_addr)) = accept_res {
                             let state_clone = server.state.clone();
+                            let client_shutdown_rx = shutdown_rx.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = Self::handle_client(socket, peer_addr, state_clone, udp_port).await {
+                                if let Err(e) = Self::handle_client(socket, peer_addr, state_clone, udp_port, client_shutdown_rx).await {
                                     eprintln!("SERVER handle_client ERROR: {:?}", e);
                                 }
                             });
@@ -128,6 +129,7 @@ impl RoomServer {
         peer_addr: SocketAddr,
         state: Arc<Mutex<RoomStateInner>>,
         relay_udp_port: u16,
+        mut shutdown_rx: watch::Receiver<bool>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (reader, mut writer) = stream.into_split();
         let mut lines = BufReader::new(reader).lines();
@@ -208,7 +210,15 @@ impl RoomServer {
         // Reader loop
         let p_id = participant_id.clone();
         let state_reader = state.clone();
-        while let Ok(Some(line)) = lines.next_line().await {
+        loop {
+            let line = tokio::select! {
+                // Closing the socket tells guests that the room has ended
+                _ = shutdown_rx.changed() => break,
+                res = lines.next_line() => match res {
+                    Ok(Some(line)) => line,
+                    _ => break,
+                },
+            };
             if let Ok(msg) = serde_json::from_str::<ClientMessage>(&line) {
                 match msg {
                     ClientMessage::Speaking { is_speaking } => {

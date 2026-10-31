@@ -27,6 +27,7 @@ struct CaptureFlags {
     is_sharing: Arc<AtomicBool>,
     stop_flag: Arc<AtomicBool>,
     packet_tx: mpsc::Sender<Vec<u8>>,
+    stream_id: u32,
     frame_counter: std::sync::atomic::AtomicU32,
     last_frame_time: std::sync::Mutex<Instant>,
     temp_buf: std::sync::Mutex<Vec<u8>>,
@@ -97,8 +98,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let total_chunks = jpeg_bytes.len().div_ceil(CHUNK_SIZE) as u16;
 
         for (chunk_idx, chunk) in jpeg_bytes.chunks(CHUNK_SIZE).enumerate() {
-            let mut packet = Vec::with_capacity(9 + chunk.len());
+            let mut packet = Vec::with_capacity(13 + chunk.len());
             packet.push(TAG_VIDEO);
+            packet.extend_from_slice(&self.flags.stream_id.to_be_bytes());
             packet.extend_from_slice(&frame_id.to_be_bytes());
             packet.extend_from_slice(&(chunk_idx as u16).to_be_bytes());
             packet.extend_from_slice(&total_chunks.to_be_bytes());
@@ -143,6 +145,7 @@ impl ScreenCapture {
             is_sharing: is_sharing.clone(),
             stop_flag: stop_flag.clone(),
             packet_tx,
+            stream_id: fastrand::u32(1..),
             frame_counter: std::sync::atomic::AtomicU32::new(1),
             last_frame_time: std::sync::Mutex::new(Instant::now()),
             temp_buf: std::sync::Mutex::new(Vec::new()),
@@ -159,9 +162,17 @@ impl ScreenCapture {
             flags,
         );
 
+        // start() blocks while capturing, so only an early failure arrives here
+        let (error_tx, error_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = CaptureHandler::start(settings);
+            if let Err(e) = CaptureHandler::start(settings) {
+                let _ = error_tx.send(format!("{:?}", e));
+            }
         });
+
+        if let Ok(e) = error_rx.recv_timeout(Duration::from_millis(500)) {
+            return Err(e.into());
+        }
 
         Ok(Self {
             is_sharing,
